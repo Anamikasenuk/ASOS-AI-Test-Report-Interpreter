@@ -1,0 +1,1552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Test Report Interpreter &amp; Decision Log</title>
+<style>
+  /* No external fonts or CDN libraries — everything runs with zero network calls. */
+  :root{
+    --ink:#20242B; --paper:#EEEDE7; --paper-raised:#FFFFFF; --line:#CBC6B8;
+    --stamp-green:#2B6E4F; --stamp-green-bg:#E4EEE8;
+    --stamp-red:#A32B1F; --stamp-red-bg:#F3E4E1;
+    --stamp-amber:#B4791E; --stamp-amber-bg:#F5E9D6;
+    --stamp-slate:#5B6472; --stamp-slate-bg:#E7E7E4;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:Arial,'Helvetica Neue',sans-serif;-webkit-font-smoothing:antialiased;}
+  .app{max-width:1080px;margin:0 auto;padding:28px 28px 90px;}
+  header.top{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid var(--ink);padding-bottom:16px;margin-bottom:22px;flex-wrap:wrap;gap:12px;}
+  .brand .eyebrow{font-family:'Consolas','Courier New',monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--stamp-slate);}
+  .brand h1{font-family:Arial,'Helvetica Neue',sans-serif;font-weight:700;font-size:26px;margin:0;letter-spacing:-0.01em;}
+  .top-meta{font-family:'Consolas','Courier New',monospace;font-size:11.5px;color:var(--stamp-slate);text-align:right;}
+  .top-meta .privacy{color:var(--stamp-green);font-weight:600;}
+
+  .howto{background:var(--paper-raised);border:1px solid var(--line);border-radius:2px;padding:16px 18px;margin-bottom:18px;font-size:13.5px;line-height:1.55;}
+  .howto b{display:block;margin-bottom:4px;}
+  .howto ol{margin:6px 0 0 20px;padding:0;}
+
+  textarea#pasteBox{
+    width:100%;min-height:220px;font-family:'Consolas','Courier New',monospace;font-size:12px;
+    padding:14px;border:1.5px solid var(--line);border-radius:2px;resize:vertical;
+    background:var(--paper-raised);
+  }
+  .actions-row{display:flex;justify-content:space-between;align-items:center;margin:10px 0 24px;flex-wrap:wrap;gap:10px;}
+  button{font-family:Arial,sans-serif;font-weight:600;font-size:13.5px;border:1.5px solid var(--ink);background:var(--ink);color:var(--paper);padding:10px 20px;border-radius:2px;cursor:pointer;}
+  button.ghost{background:transparent;color:var(--ink);}
+  button.small{padding:6px 12px;font-size:12px;}
+  button:disabled{opacity:.4;cursor:not-allowed;}
+  .errorMsg{color:var(--stamp-red);font-size:12.5px;margin-top:6px;white-space:pre-line;}
+
+  .fileStatusList{margin-top:10px;text-align:left;font-family:'Consolas','Courier New',monospace;font-size:11.5px;}
+  .fileStatusList .frow{display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-bottom:1px solid var(--line);}
+  .fileStatusList .frow .fstate{font-weight:700;}
+  .fileStatusList .frow .fstate.ok{color:var(--stamp-green);}
+  .fileStatusList .frow .fstate.err{color:var(--stamp-red);}
+  .fileStatusList .frow .fstate.pending{color:var(--stamp-slate);}
+
+  .summary-bar{background:var(--ink);color:var(--paper);border-radius:2px;padding:14px 20px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;font-family:'Consolas','Courier New',monospace;font-size:12.5px;}
+  .summary-bar .counts{display:flex;gap:18px;flex-wrap:wrap;}
+  .summary-bar .counts span.n{font-weight:700;font-size:14px;margin-right:4px;}
+  .summary-bar .c-approve{color:#8FD9B6;}
+  .summary-bar .c-reject{color:#F3B0A4;}
+  .summary-bar .c-escalate{color:#F5D28E;}
+  .summary-bar button{padding:6px 14px;font-size:11.5px;}
+
+  /* ---- Dashboard: aggregate view across all loaded reports ---- */
+  .dashboard{background:var(--paper-raised);border:1px solid var(--line);border-radius:2px;margin-bottom:20px;overflow:hidden;}
+  .dashboard-head{display:flex;justify-content:space-between;align-items:center;padding:16px 22px;border-bottom:2px solid var(--ink);}
+  .dashboard-head .eyebrow{font-family:'Consolas','Courier New',monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--stamp-slate);}
+  .dashboard-head h2{margin:2px 0 0;font-size:18px;font-weight:700;}
+  .dashboard-toggle{background:transparent;border:1px solid var(--line);color:var(--stamp-slate);padding:6px 12px;font-size:11.5px;}
+  .dashboard-body{padding:20px 22px 22px;}
+  .stat-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px;margin-bottom:22px;}
+  .stat-tile{border:1px solid var(--line);border-radius:2px;padding:12px 14px;background:var(--paper);}
+  .stat-tile .stat-n{font-family:'Consolas','Courier New',monospace;font-size:26px;font-weight:700;line-height:1;}
+  .stat-tile .stat-lbl{font-size:11px;color:var(--stamp-slate);margin-top:6px;text-transform:uppercase;letter-spacing:.04em;font-family:'Consolas','Courier New',monospace;}
+  .stat-tile.approve .stat-n{color:var(--stamp-green);}
+  .stat-tile.reject .stat-n{color:var(--stamp-red);}
+  .stat-tile.urgent{border-color:#7A1D14;background:var(--stamp-red-bg);}
+  .stat-tile.urgent .stat-n{color:#7A1D14;}
+  .stat-tile.fiber .stat-n{color:var(--stamp-amber);}
+  .dash-grid{display:grid;grid-template-columns:1.3fr 1fr;gap:24px;}
+  @media (max-width:760px){ .dash-grid{grid-template-columns:1fr;} }
+  .dash-col h3{font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--stamp-slate);font-family:'Consolas','Courier New',monospace;margin:0 0 12px;}
+  .barchart-row{display:flex;align-items:center;gap:10px;margin-bottom:9px;font-size:12.5px;}
+  .barchart-row .bc-label{width:150px;flex-shrink:0;color:var(--ink);}
+  .barchart-row .bc-track{flex:1;background:var(--paper);border:1px solid var(--line);border-radius:2px;height:16px;position:relative;overflow:hidden;}
+  .barchart-row .bc-fill{height:100%;background:var(--stamp-red);}
+  .barchart-row .bc-fill.urgent{background:#7A1D14;}
+  .barchart-row .bc-n{width:22px;text-align:right;flex-shrink:0;font-family:'Consolas','Courier New',monospace;font-weight:700;}
+  .dash-empty{font-size:12.5px;color:var(--stamp-slate);}
+  .donut-wrap{display:flex;align-items:center;gap:18px;}
+  .donut-legend{font-size:12.5px;display:flex;flex-direction:column;gap:6px;}
+  .donut-legend .leg-row{display:flex;align-items:center;gap:7px;}
+  .donut-legend .swatch{width:10px;height:10px;border-radius:2px;display:inline-block;}
+  .flagged-list{margin-top:16px;}
+  .flagged-row{display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:6px 0;border-bottom:1px solid var(--line);font-family:'Consolas','Courier New',monospace;}
+  .flagged-row .fr-tag{font-weight:700;}
+  .flagged-row .fr-tag.urgent{color:#7A1D14;}
+  .flagged-row .fr-tag.fiber{color:var(--stamp-amber);}
+
+  .result-card{background:var(--paper-raised);border:1px solid var(--line);border-radius:2px;padding:0;margin-bottom:20px;position:relative;overflow:hidden;}
+  .result-head{padding:20px 24px;border-bottom:2px solid var(--ink);display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;}
+  .result-head .reportno{font-family:'Consolas','Courier New',monospace;font-size:12px;color:var(--stamp-slate);}
+  .result-head .sourcefile{font-family:'Consolas','Courier New',monospace;font-size:10.5px;color:var(--stamp-slate);margin-top:2px;}
+  .result-head h2{margin:2px 0 0;font-size:19px;font-weight:700;}
+  .result-head .headtop{display:flex;align-items:center;gap:10px;}
+  .result-head .cardnum{font-family:'Consolas','Courier New',monospace;font-size:11px;background:var(--stamp-slate-bg);color:var(--stamp-slate);border-radius:2px;padding:2px 7px;}
+  .removeCardBtn{background:transparent;border:1px solid var(--line);color:var(--stamp-slate);padding:4px 10px;font-size:11px;}
+  .stamp{
+    font-family:Arial,sans-serif;font-weight:700;font-size:18px;letter-spacing:.06em;
+    border:3px solid currentColor;padding:6px 16px;border-radius:3px;transform:rotate(-6deg);opacity:.9;white-space:nowrap;
+  }
+  .stamp.reject{color:var(--stamp-red);}
+  .stamp.approve{color:var(--stamp-green);}
+  .stamp.escalate{color:var(--stamp-amber);}
+
+  .result-body{padding:20px 24px;}
+  .section{margin-bottom:20px;}
+  .section h3{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--stamp-slate);font-family:'Consolas','Courier New',monospace;margin:0 0 10px;}
+  .cat-block{border-left:3px solid var(--stamp-red);padding:8px 14px;margin-bottom:10px;background:var(--stamp-red-bg);border-radius:0 2px 2px 0;}
+  .cat-block.urgent{border-color:#7A1D14;background:#EBD3CE;}
+  .cat-block .cat-name{font-weight:700;font-size:13px;margin-bottom:4px;}
+  .cat-block .cat-tests{font-size:12px;color:var(--ink);margin-bottom:6px;}
+  .cat-block .cat-tests .test-row{margin-bottom:4px;}
+  .cat-block .cat-tests .test-detail{color:var(--stamp-slate);}
+  .cat-block .cat-tests .test-detail.raw{font-family:'Consolas','Courier New',monospace;font-size:11px;}
+  .cat-block .cat-action{font-size:12.5px;color:var(--ink);line-height:1.5;}
+
+  .fiber-compare{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  .fiber-col{background:var(--paper);padding:12px 14px;border-radius:2px;border:1px solid var(--line);}
+  .fiber-col .lbl{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--stamp-slate);font-family:'Consolas','Courier New',monospace;margin-bottom:4px;}
+  .fiber-col .val{font-size:13px;}
+  .note-box{background:var(--stamp-amber-bg);border-left:3px solid var(--stamp-amber);padding:10px 14px;font-size:12.5px;margin-top:10px;border-radius:0 2px 2px 0;}
+
+  table.tests{width:100%;border-collapse:collapse;font-size:12.5px;}
+  table.tests th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--stamp-slate);border-bottom:2px solid var(--ink);padding:6px 8px;font-family:'Consolas','Courier New',monospace;}
+  table.tests td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top;}
+  table.tests tr.fail-row td{background:var(--stamp-red-bg);}
+  table.tests tr.urgent-row td{background:#EBD3CE;}
+  table.tests .fail-value{color:var(--stamp-red);font-weight:700;}
+  .badge{display:inline-block;font-family:'Consolas','Courier New',monospace;font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:2px;}
+  .badge.PASS{background:var(--stamp-green-bg);color:var(--stamp-green);}
+  .badge.FAIL{background:var(--stamp-red-bg);color:var(--stamp-red);}
+  .badge.DATA{background:var(--stamp-slate-bg);color:var(--stamp-slate);}
+  .detail-na{color:var(--stamp-slate);}
+  .detail-raw{font-family:'Consolas','Courier New',monospace;font-size:11px;color:var(--stamp-slate);}
+  details summary{cursor:pointer;font-size:12.5px;color:var(--stamp-slate);margin-bottom:8px;}
+  .extract-note{font-size:11.5px;color:var(--stamp-slate);margin:6px 0 10px;font-style:italic;}
+
+  .decision-block{border-top:2px solid var(--ink);padding:18px 24px;background:var(--paper);}
+  .decision-block h3{font-size:12px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.05em;font-family:'Consolas','Courier New',monospace;}
+  .decision-btns{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;}
+  .dbtn{flex:1;min-width:110px;padding:10px 6px;font-size:12px;text-align:center;border:1.5px solid var(--line);background:var(--paper-raised);border-radius:2px;cursor:pointer;font-weight:600;color:var(--stamp-slate);}
+  .dbtn.approve.sel{border-color:var(--stamp-green);background:var(--stamp-green-bg);color:var(--stamp-green);}
+  .dbtn.reject.sel{border-color:var(--stamp-red);background:var(--stamp-red-bg);color:var(--stamp-red);}
+  .dbtn.escalate.sel{border-color:var(--stamp-amber);background:var(--stamp-amber-bg);color:var(--stamp-amber);}
+  textarea.comment, input.name-input{width:100%;border:1px solid var(--line);border-radius:2px;padding:9px 10px;font-family:Arial,sans-serif;font-size:13px;resize:vertical;margin-bottom:10px;}
+  .saved-tag{font-size:12px;color:var(--stamp-green);font-family:'Consolas','Courier New',monospace;}
+
+  .log-section h2{font-size:15px;margin:0 0 12px;}
+  table.log{width:100%;border-collapse:collapse;background:var(--paper-raised);font-size:12.5px;}
+  table.log th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--stamp-slate);border-bottom:2px solid var(--ink);padding:8px;font-family:'Consolas','Courier New',monospace;}
+  table.log td{padding:8px;border-bottom:1px solid var(--line);}
+
+  .emptyState{background:var(--paper-raised);border:1px dashed var(--line);border-radius:2px;padding:26px;text-align:center;color:var(--stamp-slate);font-size:13px;margin-bottom:20px;}
+
+  footer.export-bar{position:fixed;bottom:0;left:0;right:0;background:var(--ink);color:var(--paper);padding:12px 28px;display:flex;justify-content:space-between;align-items:center;font-family:'Consolas','Courier New',monospace;font-size:12px;z-index:20;}
+  footer.export-bar button{border-color:var(--paper);background:var(--paper);color:var(--ink);}
+  footer.export-bar button.ghost{background:transparent;color:var(--paper);border-color:rgba(238,237,231,.4);}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <span class="eyebrow">Fabric Tech &middot; Supplier Compliance</span>
+      <h1>Test Report Interpreter &amp; Decision Log</h1>
+    </div>
+    <div class="top-meta">
+      <div class="privacy">&#9679; runs entirely in this browser — no data leaves this machine</div>
+      <div>Upload several reports at once, or paste one after another</div>
+    </div>
+  </header>
+
+  <div class="howto">
+    <b>Two ways to load reports — you can mix and match, add more any time:</b>
+    <ol>
+      <li><b>Upload PDFs directly</b> — drop several files at once below, or choose multiple in the file picker (Ctrl/Cmd-click to select more than one).</li>
+      <li><b>Or paste the text</b> — open each PDF, select all (Ctrl/Cmd+A), copy, and paste into the box. You can paste multiple reports one after another into the same box — the tool automatically splits them wherever a new "Test Report:" begins.</li>
+    </ol>
+    <div style="margin-top:8px;color:var(--stamp-slate);">PDF reading is done with a text extractor written from scratch  — tested against real Bureau Veritas reports, but PDF internals vary by generator. If extraction looks wrong or incomplete for a given report, the paste method will always be the reliable fallback.</div>
+    <div style="margin-top:8px;color:var(--stamp-slate);">For failed tests, the tool now also tries to pull the <b>actual measured result</b> and the <b>requirement/limit</b> it was checked against — including full per-property breakdown tables for Bureau Veritas–style detailed results grids (Tested Property / Requirements / Results / Rating). This is heuristic — layout varies by report generator — so always cross-check flagged values against the source PDF. If it's missing or wrong for your reports, share a redacted sample and the extraction can be tuned further.</div>
+  </div>
+
+  <div class="upload-zone" id="dropZone" style="background:var(--paper-raised);border:2px dashed var(--line);border-radius:2px;padding:20px;text-align:center;margin-bottom:16px;">
+    <p style="margin:0 0 10px;font-size:13.5px;color:var(--stamp-slate);">Drop one or more report PDFs here</p>
+    <button id="chooseBtn" class="ghost">Choose PDF file(s)</button>
+    <input type="file" id="fileInput" accept=".pdf" multiple style="display:none;">
+    <div class="fileStatusList" id="fileStatusList"></div>
+  </div>
+
+  <div style="text-align:center;font-size:11.5px;color:var(--stamp-slate);margin-bottom:10px;">— or paste text below (one or several reports) —</div>
+
+  <textarea id="pasteBox" placeholder="Paste the full copied text of one or more test reports here..."></textarea>
+  <div class="actions-row">
+    <button id="interpretBtn">Interpret &amp; add report(s)</button>
+    <button class="ghost small" id="clearBtn">Clear paste box</button>
+  </div>
+  <div class="errorMsg" id="errorMsg"></div>
+
+  <div id="dashboardWrap"></div>
+  <div id="summaryBarWrap"></div>
+  <div id="resultsWrap"></div>
+  <div class="emptyState" id="emptyState">No reports loaded yet. Upload PDFs or paste report text above to get started.</div>
+
+  <div class="log-section" id="logSection" style="display:none;">
+    <h2>Decision log (this session)</h2>
+    <table class="log" id="logTable"></table>
+  </div>
+</div>
+
+<footer class="export-bar" id="exportBar" style="display:none;">
+  <div id="footerCount">0 decisions logged</div>
+  <div><button id="exportLogBtn">Export decision log (CSV)</button></div>
+</footer>
+
+<script>
+(function(){
+  const pasteBox = document.getElementById('pasteBox');
+  const interpretBtn = document.getElementById('interpretBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const errorMsg = document.getElementById('errorMsg');
+  const resultsWrap = document.getElementById('resultsWrap');
+  const emptyState = document.getElementById('emptyState');
+  const summaryBarWrap = document.getElementById('summaryBarWrap');
+  const dashboardWrap = document.getElementById('dashboardWrap');
+  const exportBar = document.getElementById('exportBar');
+  const footerCount = document.getElementById('footerCount');
+  const logSection = document.getElementById('logSection');
+  const logTable = document.getElementById('logTable');
+  const fileStatusList = document.getElementById('fileStatusList');
+
+  let decisionLog = []; // {reportNo, sourceFile, verdict, decision, comment, by, date}
+  let reportCardsMeta = []; // {id, decisionClass, reportNo, verdict, hasUrgent, fiberFlag, categories:[{key,label,count,urgent}]} — one entry per rendered report card, feeds both the summary bar and the dashboard
+  let cardCounter = 0;
+  let dashboardCollapsed = false;
+
+  function refreshEmptyState(){
+    emptyState.style.display = resultsWrap.children.length ? 'none' : 'block';
+  }
+
+  clearBtn.addEventListener('click', () => { pasteBox.value = ''; errorMsg.textContent=''; });
+
+  // ---- Splitting pasted text into one or more individual reports ----
+  // Each report's text begins with "Test Report:" — use that as a boundary
+  // so a single paste containing several reports back-to-back gets split
+  // automatically. If that marker never appears, treat the whole paste as
+  // one report (falls through to the normal single-report parse).
+  function splitPastedReports(text){
+    const marker = /Test Report:/gi;
+    const starts = [];
+    let m;
+    while ((m = marker.exec(text))) starts.push(m.index);
+    if (starts.length <= 1) return [text];
+    const chunks = [];
+    for (let i = 0; i < starts.length; i++){
+      const start = starts[i];
+      const end = i + 1 < starts.length ? starts[i+1] : text.length;
+      chunks.push(text.slice(start, end));
+    }
+    return chunks;
+  }
+
+  interpretBtn.addEventListener('click', () => {
+    errorMsg.textContent = '';
+    const text = pasteBox.value;
+    if (!text || text.trim().length < 30){
+      errorMsg.textContent = 'Paste the report text first — this looks too short to be a full report.';
+      return;
+    }
+    const chunks = splitPastedReports(text).map(c => c.trim()).filter(c => c.length >= 30);
+    if (!chunks.length){
+      errorMsg.textContent = 'Paste the report text first — this looks too short to be a full report.';
+      return;
+    }
+    const errors = [];
+    let addedCount = 0;
+    chunks.forEach((chunk, idx) => {
+      try{
+        const parsed = parseReport(chunk);
+        if (!parsed.reportNo && !parsed.overallVerdict && parsed.tableResults.length === 0){
+          errors.push('Pasted report ' + (idx+1) + ": couldn't recognize this as a lab test report.");
+          return;
+        }
+        renderResult(parsed, null);
+        addedCount++;
+      } catch(err){
+        errors.push('Pasted report ' + (idx+1) + ': ' + err.message);
+        console.error(err);
+      }
+    });
+    if (errors.length) errorMsg.textContent = errors.join('\n');
+    if (addedCount) pasteBox.value = '';
+    refreshEmptyState();
+  });
+
+  const dropZone = document.getElementById('dropZone');
+  const fileInput = document.getElementById('fileInput');
+  const chooseBtn = document.getElementById('chooseBtn');
+
+  chooseBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', e => { if (e.target.files.length) handlePdfFiles(e.target.files); });
+  ['dragover','dragenter'].forEach(ev => dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.style.borderColor = 'var(--stamp-green)'; }));
+  ['dragleave','drop'].forEach(ev => dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.style.borderColor = 'var(--line)'; }));
+  dropZone.addEventListener('drop', e => { if (e.dataTransfer.files.length) handlePdfFiles(e.dataTransfer.files); });
+
+  function setFileStatus(rowEl, state, text){
+    rowEl.querySelector('.fstate').className = 'fstate ' + state;
+    rowEl.querySelector('.fstate').textContent = text;
+  }
+
+  async function handlePdfFiles(fileList){
+    errorMsg.textContent = '';
+    const files = Array.from(fileList);
+    const rows = files.map(f => {
+      const row = document.createElement('div');
+      row.className = 'frow';
+      row.innerHTML = '<span class="fname"></span><span class="fstate pending">reading…</span>';
+      row.querySelector('.fname').textContent = f.name;
+      fileStatusList.appendChild(row);
+      return row;
+    });
+
+    // Process sequentially so status updates are readable and memory use stays bounded.
+    for (let i = 0; i < files.length; i++){
+      const file = files[i];
+      const row = rows[i];
+      if (!file.name.toLowerCase().endsWith('.pdf')){
+        setFileStatus(row, 'err', 'not a PDF — skipped');
+        continue;
+      }
+      try{
+        const buf = await file.arrayBuffer();
+        const text = await extractPdfText(buf);
+        if (!text || text.replace(/\s/g,'').length < 50){
+          setFileStatus(row, 'err', "couldn't extract text — use paste method");
+          continue;
+        }
+        const parsed = parseReport(text);
+        if (!parsed.reportNo && !parsed.overallVerdict && parsed.tableResults.length === 0){
+          setFileStatus(row, 'err', "not recognized as a test report");
+          continue;
+        }
+        renderResult(parsed, file.name);
+        setFileStatus(row, 'ok', 'added ✓');
+      } catch(err){
+        setFileStatus(row, 'err', 'error: ' + err.message);
+        console.error(err);
+      }
+    }
+    refreshEmptyState();
+    fileInput.value = '';
+  }
+
+  // ================= Native PDF text extractor (no CDN, no library) =================
+  // Tested against real Bureau Veritas reports. Works for the common case: a PDF
+  // with plain (uncompressed-object-list) structure, FlateDecode content streams,
+  // and WinAnsiEncoding text — true for both sample reports checked during development.
+  // Falls back gracefully (visible error, not silent failure) if a PDF doesn't fit this shape.
+
+  const WIN_ANSI_HIGH = {
+    0x80:'€',0x82:'‚',0x83:'ƒ',0x84:'„',0x85:'…',0x86:'†',
+    0x87:'‡',0x88:'ˆ',0x89:'‰',0x8A:'Š',0x8B:'‹',0x8C:'Œ',
+    0x8E:'Ž',0x91:'‘',0x92:'’',0x93:'“',0x94:'”',0x95:'•',
+    0x96:'–',0x97:'—',0x98:'˜',0x99:'™',0x9A:'š',0x9B:'›',
+    0x9C:'œ',0x9E:'ž',0x9F:'Ÿ'
+  };
+  function winAnsiDecode(bytes){
+    let s = '';
+    const CHUNK = 0x4000;
+    for (let off = 0; off < bytes.length; off += CHUNK){
+      const end = Math.min(off + CHUNK, bytes.length);
+      let piece = '';
+      for (let i = off; i < end; i++){
+        const b = bytes[i];
+        piece += (b >= 0x80 && b <= 0x9F && WIN_ANSI_HIGH[b]) ? WIN_ANSI_HIGH[b] : String.fromCharCode(b);
+      }
+      s += piece;
+    }
+    return s;
+  }
+  function bytesToBinaryString(bytes){
+    let s = '';
+    const CHUNK = 0x4000;
+    for (let off = 0; off < bytes.length; off += CHUNK){
+      s += String.fromCharCode.apply(null, bytes.subarray(off, Math.min(off+CHUNK, bytes.length)));
+    }
+    return s;
+  }
+
+  function findAllPdfObjects(binStr){
+    const objects = {};
+    const re = /(\d+)\s+(\d+)\s+obj/g;
+    let m;
+    while ((m = re.exec(binStr))){
+      const rawStart = m.index + m[0].length;
+      const endIdx = binStr.indexOf('endobj', rawStart);
+      if (endIdx === -1) continue;
+      objects[m[1]] = { raw: binStr.slice(rawStart, endIdx), start: rawStart };
+    }
+    return objects;
+  }
+
+  function getPdfStreamBytes(bytes, objRaw, objStart, binStr){
+    const streamRel = objRaw.indexOf('stream');
+    if (streamRel === -1) return null;
+    let dataStart = objStart + streamRel + 'stream'.length;
+    if (binStr[dataStart] === '\r') dataStart++;
+    if (binStr[dataStart] === '\n') dataStart++;
+    const endIdx = binStr.indexOf('endstream', dataStart);
+    if (endIdx === -1) return null;
+    let dataEnd = endIdx;
+    if (binStr[dataEnd-1] === '\n') dataEnd--;
+    if (binStr[dataEnd-1] === '\r') dataEnd--;
+    return bytes.slice(dataStart, dataEnd);
+  }
+
+  async function inflateZlib(bytes){
+    if (typeof DecompressionStream === 'undefined'){
+      throw new Error("this browser can't decompress PDF streams (missing a required feature)");
+    }
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  function tokenizePdfContent(s){
+    const tokens = [];
+    let i = 0;
+    const n = s.length;
+    while (i < n){
+      const c = s[i];
+      if (/\s/.test(c)){ i++; continue; }
+      if (c === '%'){ while (i<n && s[i] !== '\n') i++; continue; }
+      if (c === '('){
+        let depth=1; i++; let str='';
+        while (i<n && depth>0){
+          const ch = s[i];
+          if (ch === '\\'){
+            const nx = s[i+1];
+            if (nx === 'n'){str+='\n';i+=2;continue;}
+            if (nx === 'r'){str+='\r';i+=2;continue;}
+            if (nx === 't'){str+='\t';i+=2;continue;}
+            if (nx==='('||nx===')'||nx==='\\'){str+=nx;i+=2;continue;}
+            if (nx!==undefined && /[0-7]/.test(nx)){
+              let oct=''; i++;
+              for(let k=0;k<3 && /[0-7]/.test(s[i]);k++){oct+=s[i];i++;}
+              str+=String.fromCharCode(parseInt(oct,8));
+              continue;
+            }
+            str += (nx||''); i+=2; continue;
+          }
+          if (ch==='('){depth++;str+=ch;i++;continue;}
+          if (ch===')'){depth--;i++; if(depth>0) str+=ch; continue;}
+          str+=ch; i++;
+        }
+        tokens.push({t:'str', v:str});
+        continue;
+      }
+      if (c === '<'){
+        if (s[i+1] === '<'){
+          let depth=1; i+=2;
+          while (i<n && depth>0){
+            if (s[i]==='<' && s[i+1]==='<'){depth++;i+=2;continue;}
+            if (s[i]==='>' && s[i+1]==='>'){depth--;i+=2;continue;}
+            i++;
+          }
+          continue;
+        } else {
+          const close = s.indexOf('>', i);
+          const hex = s.slice(i+1, close===-1?n:close).replace(/\s/g,'');
+          let str='';
+          for(let k=0;k<hex.length;k+=2) str+=String.fromCharCode(parseInt(hex.slice(k,k+2),16)||0);
+          tokens.push({t:'str', v:str});
+          i = close===-1? n : close+1;
+          continue;
+        }
+      }
+      if (c === '[' || c === ']' || c === '{' || c === '}'){ i++; continue; }
+      if (c === '/'){ i++; while(i<n && /[^\s/\[\]<>()%]/.test(s[i])) i++; continue; }
+      if (/[-+.\d]/.test(c)){
+        let start=i; i++;
+        while (i<n && /[-+.\d]/.test(s[i])) i++;
+        const val = parseFloat(s.slice(start,i));
+        tokens.push({t:'num', v: isNaN(val)?0:val});
+        continue;
+      }
+      if (/[A-Za-z'"]/.test(c)){
+        let start=i; i++;
+        while (i<n && /[A-Za-z0-9*]/.test(s[i])) i++;
+        tokens.push({t:'op', v: s.slice(start,i)});
+        continue;
+      }
+      i++;
+    }
+    return tokens;
+  }
+
+  // Reconstructs true visual reading order instead of PDF content-stream
+  // operator order. Earlier versions concatenated text in the order Tj/TJ
+  // operators appeared in the stream and only tracked *relative* Td/TD moves —
+  // but many PDF generators (this report's included) lay out table cells with
+  // *absolute* Tm positioning, sometimes drawing a whole column before moving
+  // on to the next, so stream order can scramble a table's rows (e.g. a
+  // requirement value ending up glued onto the wrong property, or a later
+  // column's text appearing before an earlier column's on the same row).
+  // Fix: track the full text/graphics position matrix (Tm, Td/TD/T*, cm,
+  // q/Q) per PDF spec, record the (x, y) each string is actually drawn at,
+  // then group runs into lines by y and order each line left-to-right by x —
+  // i.e. reconstruct the page the way it's actually laid out, not the way
+  // the operators happened to stream.
+  function mat3mul(m1, m2){
+    const a1=m1[0],b1=m1[1],c1=m1[2],d1=m1[3],e1=m1[4],f1=m1[5];
+    const a2=m2[0],b2=m2[1],c2=m2[2],d2=m2[3],e2=m2[4],f2=m2[5];
+    return [
+      a1*a2 + b1*c2,
+      a1*b2 + b1*d2,
+      c1*a2 + d1*c2,
+      c1*b2 + d1*d2,
+      e1*a2 + f1*c2 + e2,
+      e1*b2 + f1*d2 + f2
+    ];
+  }
+  function applyMatPoint(m, x, y){
+    return [m[0]*x + m[2]*y + m[4], m[1]*x + m[3]*y + m[5]];
+  }
+
+  function pdfTokensToRuns(tokens){
+    const runs = [];
+    let ctm = [1,0,0,1,0,0];
+    let ctmStack = [];
+    let tm = [1,0,0,1,0,0];
+    let tlm = [1,0,0,1,0,0];
+    let tl = 0;
+    let pendingStrings = [];
+    let nums = [];
+
+    function flushShow(){
+      const chunk = pendingStrings.join('');
+      pendingStrings = [];
+      if (!chunk) return;
+      const trm = mat3mul(tm, ctm);
+      const pt = applyMatPoint(trm, 0, 0);
+      runs.push({ x: pt[0], y: pt[1], text: chunk });
+    }
+
+    for (const tok of tokens){
+      if (tok.t === 'num'){ nums.push(tok.v); continue; }
+      if (tok.t === 'str'){ pendingStrings.push(tok.v); continue; }
+      if (tok.t === 'op'){
+        const v = tok.v;
+        if (v === 'q'){ ctmStack.push(ctm.slice()); }
+        else if (v === 'Q'){ ctm = ctmStack.pop() || ctm; }
+        else if (v === 'cm'){ if (nums.length >= 6) ctm = mat3mul(nums.slice(-6), ctm); }
+        else if (v === 'BT'){ tm = [1,0,0,1,0,0]; tlm = [1,0,0,1,0,0]; }
+        else if (v === 'ET'){ /* no-op */ }
+        else if (v === 'Tm'){ if (nums.length >= 6){ const m = nums.slice(-6); tm = m.slice(); tlm = m.slice(); } }
+        else if (v === 'TL'){ if (nums.length >= 1) tl = nums[nums.length-1]; }
+        else if (v === 'Td'){
+          if (nums.length >= 2){
+            const tx = nums[nums.length-2], ty = nums[nums.length-1];
+            tlm = mat3mul([1,0,0,1,tx,ty], tlm);
+            tm = tlm.slice();
+          }
+        } else if (v === 'TD'){
+          if (nums.length >= 2){
+            const tx = nums[nums.length-2], ty = nums[nums.length-1];
+            tl = -ty;
+            tlm = mat3mul([1,0,0,1,tx,ty], tlm);
+            tm = tlm.slice();
+          }
+        } else if (v === 'T*'){
+          tlm = mat3mul([1,0,0,1,0,-tl], tlm);
+          tm = tlm.slice();
+        } else if (v === 'Tj' || v === 'TJ'){
+          flushShow();
+        } else if (v === "'" || v === '"'){
+          tlm = mat3mul([1,0,0,1,0,-tl], tlm);
+          tm = tlm.slice();
+          flushShow();
+        }
+        nums = [];
+        continue;
+      }
+    }
+    return runs;
+  }
+
+  function runsToText(runs){
+    if (!runs.length) return '';
+    const TOL = 2.5; // vertical tolerance (PDF units) for "same line"
+    const sorted = runs.slice().sort((a, b) => b.y - a.y || a.x - b.x);
+    const lines = [];
+    let current = null;
+    for (const r of sorted){
+      if (current && Math.abs(r.y - current.y) <= TOL){
+        current.items.push(r);
+      } else {
+        current = { y: r.y, items: [r] };
+        lines.push(current);
+      }
+    }
+    return lines.map(line => {
+      line.items.sort((a, b) => a.x - b.x);
+      let out = '';
+      for (const it of line.items){
+        if (out && !/[\s]$/.test(out) && !/^[\s]/.test(it.text)) out += ' ';
+        out += it.text;
+      }
+      return out;
+    }).join('\n');
+  }
+
+  async function extractPdfText(arrayBuffer){
+    const bytes = new Uint8Array(arrayBuffer);
+    const binStr = bytesToBinaryString(bytes);
+    const objects = findAllPdfObjects(binStr);
+    let allText = '';
+    for (const id in objects){
+      const obj = objects[id];
+      if (!obj.raw.includes('stream')) continue;
+      if (/\/Subtype\s*\/Image/.test(obj.raw)) continue;
+      const streamBytes = getPdfStreamBytes(bytes, obj.raw, obj.start, binStr);
+      if (!streamBytes) continue;
+      let inflated;
+      try{
+        inflated = /\/Filter\s*\/FlateDecode/.test(obj.raw) ? await inflateZlib(streamBytes) : streamBytes;
+      } catch(e){ continue; }
+      const decoded = winAnsiDecode(inflated);
+      if (/\bTj\b|\bTJ\b/.test(decoded)){
+        const runs = pdfTokensToRuns(tokenizePdfContent(decoded));
+        allText += runsToText(runs) + '\n';
+      }
+    }
+    return allText;
+  }
+
+  // ================= Parsing (tested against real Bureau Veritas reports) =================
+
+  // Best-effort extraction of the "actual result" and "requirement/limit" values
+  // for a single named test, searched in a window of text around where the test
+  // name appears in the (near-)original report text. Report layouts vary a lot
+  // between labs and even between report templates from the same lab, so this
+  // tries a few strategies and falls back to a raw context snippet — still useful
+  // to the reader even when we can't confidently label which number is which.
+  function extractTestDetail(rawText, testName, otherNames){
+    if (!testName) return null;
+    const escaped = testName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (!escaped) return null;
+    otherNames = (otherNames || []).filter(n => n && n.trim() && n.trim().toLowerCase() !== testName.trim().toLowerCase());
+    const otherEscaped = otherNames
+      .map(n => n.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .filter(Boolean);
+
+    // A test name typically appears more than once — in an executive summary
+    // list, in the overall-ratings table, and again in a detailed results
+    // section that actually carries the requirement/result values. Scanning
+    // only the first occurrence (usually the summary list) was pulling the
+    // wrong test's numbers; instead, check every occurrence (bounded) and use
+    // whichever one actually yields labeled or tabular values.
+    let idxs = [];
+    try{
+      const findRe = new RegExp(escaped, 'gi');
+      let m;
+      while ((m = findRe.exec(rawText)) && idxs.length < 8){
+        idxs.push(m.index);
+        if (findRe.lastIndex === m.index) findRe.lastIndex++; // guard against zero-length matches
+      }
+    } catch(e){ return null; }
+    if (!idxs.length) return null;
+
+    // Cap each occurrence's search window at the nearest following occurrence of
+    // ANY other known test name (within a max span), so a match for THIS test can
+    // never accidentally spill into the next test's own requirement/result block —
+    // that cross-contamination was the original bug here.
+    function windowEndFor(idx, maxSpan){
+      let end = idx + maxSpan;
+      if (!otherEscaped.length) return end;
+      for (const oe of otherEscaped){
+        try{
+          const re = new RegExp(oe, 'i');
+          const searchFrom = idx + testName.length;
+          const rel = rawText.slice(searchFrom, end).search(re);
+          if (rel !== -1){
+            const abs = searchFrom + rel;
+            if (abs < end) end = abs;
+          }
+        } catch(e){ /* skip malformed name */ }
+      }
+      return end;
+    }
+
+    // Strategy 1: explicit labeled fields — "Requirement: X" / "Result: Y" (also
+    // Standard/Specification/Limit and Actual/Observed/Found as synonyms), in
+    // either order, possibly split across lines.
+    // Both the keyword itself and the STOP lookahead's keywords are wrapped in
+    // \b...\b so they only match whole words — without that, "spec" (short for
+    // "Specification") was matching as a substring inside ordinary words like
+    // "specimen", grabbing garbled prose ("imen surface...") as if it were a
+    // real labeled requirement value. Never match a keyword that isn't a
+    // standalone word.
+    const VALUE = '([A-Za-z0-9][A-Za-z0-9.,%\\/°\\-± ]{0,40}?)';
+    const STOP = '(?=\\s{2,}|\\s*\\b(?:requirement|standard|specification|spec|limit|result|actual|observed|found|rating|method|pass|fail)\\b|[\\n]|$)';
+    const reqRe = new RegExp('\\b(?:requirement|standard|specification|spec|limit)s?\\b\\s*[:\\-]?\\s*' + VALUE + STOP, 'i');
+    const resRe = new RegExp('\\b(?:result|actual|observed|found)s?\\b\\s*[:\\-]?\\s*' + VALUE + STOP, 'i');
+    // A captured value only counts if it actually looks like a value (contains a
+    // digit or the word "grade") — otherwise it's likely stray prose that happened
+    // to follow the keyword, and we're better off falling through to the next strategy.
+    const looksLikeValue = v => !!v && (/\d/.test(v) || /grade/i.test(v));
+    // Strategy 2: tabular numeric pairs — two grade/number-like tokens (optionally
+    // with a unit and/or "min"/"max" qualifier, in either order) sitting close
+    // together right before a PASS/FAIL/DATA rating, e.g. "Grade 4 min  Grade 3  FAIL"
+    // or "6 mm max   9 mm   FAIL".
+    const UNITQUAL = '(?:\\s*(?:%|n|kg|mm|cm|min|max))*';
+    const pairRe = new RegExp('((?:grade\\s*)?[\\d.]+' + UNITQUAL + ')\\s+((?:grade\\s*)?[\\d.]+' + UNITQUAL + ')\\s*(?=PASS|FAIL|DATA)', 'i');
+
+    let lastRawSnippet = null;
+    for (const idx of idxs){
+      const end = windowEndFor(idx, 500);
+      const window = rawText.slice(idx, Math.max(end, idx + testName.length));
+      const windowFlat = window.replace(/\s+/g, ' ');
+
+      const reqMatchRaw = windowFlat.match(reqRe);
+      const resMatchRaw = windowFlat.match(resRe);
+      const reqMatch = reqMatchRaw && looksLikeValue(reqMatchRaw[1]) ? reqMatchRaw : null;
+      const resMatch = resMatchRaw && looksLikeValue(resMatchRaw[1]) ? resMatchRaw : null;
+      if (reqMatch || resMatch){
+        const requirement = reqMatch ? reqMatch[1].trim().replace(/[,;]$/, '') : null;
+        const result = resMatch ? resMatch[1].trim().replace(/[,;]$/, '') : null;
+        if (requirement || result) return { requirement, result, raw: null };
+      }
+
+      const pairMatch = windowFlat.match(pairRe);
+      if (pairMatch){
+        return { requirement: pairMatch[1].trim(), result: pairMatch[2].trim(), raw: null };
+      }
+
+      // Keep the last occurrence's context as a fallback snippet — detailed
+      // sections tend to come later in the document than summary mentions,
+      // so the final occurrence is the best fallback guess if nothing else matched.
+      const snippet = windowFlat.replace(new RegExp(escaped, 'i'), '').trim().slice(0, 140);
+      if (snippet) lastRawSnippet = snippet;
+    }
+
+    // Fallback: no confidently-labeled values found anywhere — surface a short
+    // raw snippet so the reader can still see nearby numbers and check manually.
+    return lastRawSnippet ? { requirement: null, result: null, raw: lastRawSnippet } : null;
+  }
+
+  // ================= Detailed grid-table extraction (TESTED PROPERTY / REQUIREMENTS / RESULTS / RATING) =================
+  // Many lab reports (Bureau Veritas among them) carry a second, more detailed
+  // section below the executive summary: one real grid table per test, with
+  // columns "Tested Property", "Requirements", "Results", "Rating" — and a
+  // section title line ending in a standard code, e.g.
+  // "Martindale pilling (ISO 12945-2:2020)". Individual property rows inside
+  // a section (e.g. "Pilling at 2000 Rubs" / "Fuzzing at 2000 rubs") often
+  // share one overall PASS/FAIL rating for the whole section, and requirement
+  // cells are frequently left blank for later rows because they're visually
+  // merged with the row above in the source PDF. This extractor is tuned to
+  // that shape; it's heuristic (report layouts vary), so treat extracted rows
+  // as a starting point to double check against the source PDF, not gospel.
+  const SECTION_CODE_RE = /\(\s*(?:ISO|ASTM|AATCC|BS\s?EN|EN|BS|GB\/T|GB|JIS|AS\/NZS|ANSI|ASOS|EPA|CPSC|CPSIA|IWTO|ES|UNE|NF)\b[^()\n]{0,60}\)/i;
+
+  function findDetailedSections(rawText){
+    const lines = rawText.split(/\r?\n/);
+    // Anchor on the line containing "RATING" (the last, most distinctive column
+    // header) and look a few lines backward for the other three headers — this
+    // correctly lands hIdx on the header's own line even when a look-ahead
+    // window would otherwise trigger early on unrelated preceding text that
+    // happens to contain a couple of the same words.
+    let hIdx = -1;
+    for (let i = 0; i < lines.length; i++){
+      if (!/\bRATING\b/i.test(lines[i])) continue;
+      const windowText = lines.slice(Math.max(0, i - 3), i + 1).join(' ');
+      // Accept both plural ("Tested Property / Requirements / Results") and
+      // singular ("Test / Requirement / Result") column-header phrasing —
+      // different report templates use either.
+      const hasProperty = /TESTED\s+PROPERTY|\bTEST\b/i.test(windowText);
+      const hasRequirement = /REQUIREMENTS?\b/i.test(windowText);
+      const hasResult = /RESULTS?\b/i.test(windowText);
+      if (hasProperty && hasRequirement && hasResult){
+        hIdx = i; break;
+      }
+    }
+    if (hIdx === -1) return [];
+
+    // Deliberately no early-stop-word scan here: words like "REMARKS" and
+    // "CONCLUSION" turned out to also be ordinary field labels inside real
+    // report tables ("Remarks: the labeled fiber content...", "Conclusion
+    // Pass"), so breaking the scan on them truncated the entire report after
+    // just one section. Section titles are identified purely by the standard-
+    // code parenthetical pattern instead — safe to scan to the end of the text.
+    const markers = [];
+    for (let i = hIdx + 1; i < lines.length; i++){
+      const line = lines[i];
+      const cm = line.match(SECTION_CODE_RE);
+      if (!cm) continue;
+      const before = line.slice(0, cm.index);
+      if (/\b(PASS|FAIL|DATA)\b/i.test(before)) continue; // a rating before the code paren means this isn't a title line
+      markers.push({ lineIdx: i, endInLine: cm.index + cm[0].length, title: (before + cm[0]).trim() });
+    }
+    if (!markers.length) return [];
+
+    const sections = [];
+    for (let i = 0; i < markers.length; i++){
+      const mk = markers[i];
+      const nextMk = markers[i + 1];
+      const bodyLines = [];
+      const restOfTitleLine = lines[mk.lineIdx].slice(mk.endInLine).trim();
+      if (restOfTitleLine) bodyLines.push(restOfTitleLine);
+      const bodyEnd = nextMk ? nextMk.lineIdx : lines.length;
+      for (let k = mk.lineIdx + 1; k < bodyEnd; k++) bodyLines.push(lines[k]);
+
+      const shortTitle = mk.title.replace(/\s*\([^()]*\)\s*$/, '').trim();
+      let rating = null;
+      for (let k = 0; k < Math.min(bodyLines.length, 6); k++){
+        const rm = bodyLines[k].match(/\b(PASS|FAIL|DATA)\b/i);
+        if (rm){ rating = rm[1].toUpperCase(); break; }
+      }
+      sections.push({ title: mk.title, shortTitle, rating, bodyLines });
+    }
+    return sections;
+  }
+
+  // usedSections (optional) excludes sections already claimed by an earlier
+  // call — some reports reuse the exact same test name for two different
+  // ratings (e.g. one visual "Colourfastness to water" scored FAIL and a
+  // separate Digi-eye instrument reading of the same name scored DATA).
+  // Without this, both entries would silently match the same first section.
+  function findMatchingSection(sections, name, usedSections){
+    if (!sections || !sections.length || !name) return null;
+    const norm = s => s.toLowerCase().replace(/\s+/g, ' ').trim();
+    const n = norm(name);
+    const avail = usedSections ? sections.filter(s => !usedSections.has(s)) : sections;
+    let best = avail.find(s => norm(s.shortTitle) === n);
+    if (!best) best = avail.find(s => norm(s.shortTitle).startsWith(n) || n.startsWith(norm(s.shortTitle)));
+    if (!best) best = avail.find(s => norm(s.shortTitle).includes(n) || n.includes(norm(s.shortTitle)));
+    if (best && usedSections) usedSections.add(best);
+    return best || null;
+  }
+
+  // Many Bureau Veritas reports mark the specific measurement that actually
+  // caused a section to fail with a trailing asterisk on the result value
+  // (e.g. "Grade 3-4 *", "3.4*") and print an explicit legend for it
+  // ("* INDICATES DOES NOT MEET THE REQUIREMENT"). That convention is far more
+  // reliable than trying to generically parse every table shape a report can
+  // use (multi-column tables, wrapped property labels split across lines,
+  // requirement text that only appears once for a whole group of rows, result
+  // values that print BEFORE a wrapped second line of their own requirement
+  // cell) — so this is tried first, and is usually the cleanest signal for
+  // "what actually failed, and by how much".
+  const MINMAX_PHRASE_RE = /\b(?:Min\.|Max\.)\s*(?:Grade\s*\d(?:\s*-\s*\d)?|[\d.,]+\s*(?:kgf?|gram\(s\)|grams?|rubs|mm|cm|n(?![a-z])|%|°c|hours?|cycles?|hrs?)?)/gi;
+
+  function findFailingMeasurements(bodyLines){
+    const SPEC_CODE = /\b[A-Z0-9]{2,}(?:-[A-Z0-9.]+){2,}(?:\s+(?:GBL[\w\-]*|PHASE))*\b/g;
+    const cleaned = (bodyLines || [])
+      .filter(l => l != null)
+      .filter(l => !/^\s*\([^()]*\)\s*$/.test(l.trim()))
+      .map(l => l.replace(/\b(PASS|FAIL|DATA)\b/gi, ' '));
+
+    // The section's overall stated threshold — first Min./Max. phrase found
+    // anywhere in the section, shown once even if it technically applies to
+    // several rows (reports frequently only print it once, on the first row).
+    let requirement = null;
+    for (const l of cleaned){
+      const m = l.match(MINMAX_PHRASE_RE);
+      if (m){ requirement = m[0].replace(/\s+/g, ' ').trim(); break; }
+    }
+
+    const STAR_RE = /((?:Grade\s*\d(?:\s*-\s*\d)?)|[\d.,]+)\s*\*/i;
+    const failing = [];
+    cleaned.forEach((line, idx) => {
+      const starMatch = line.match(STAR_RE);
+      if (!starMatch) return;
+      let label = line.slice(0, starMatch.index)
+        .replace(SPEC_CODE, ' ')
+        .replace(MINMAX_PHRASE_RE, ' ')
+        // "NSS" ("No Significant Slippage") is Bureau Veritas seam-test jargon
+        // for a *different* measurement's result printed on the same row
+        // (e.g. "Warp Way Seam ... NSS 3.0* (a)" — NSS is the slippage result,
+        // 3.0* is the separate seam-strength result that actually failed) —
+        // strip it so it doesn't get glued onto this property's own label.
+        .replace(/\bNSS\b/g, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/^[.,;:\-–]+|[.,;:\-–]+$/g, '')
+        .trim();
+      // The property label sometimes wraps onto the next line (a merged/tall
+      // table cell) — append it when that next line looks like a short bare
+      // qualifier rather than the start of a new row.
+      if (idx + 1 < cleaned.length){
+        const strippedNext = cleaned[idx + 1].replace(MINMAX_PHRASE_RE, '').trim();
+        // Require an actual word (2+ letters), not just a stray single
+        // character — PDF page-layout artifacts (border glyphs misread as a
+        // lone "I", page-footer remnants) are common right after a section's
+        // real content and would otherwise get glued onto the label.
+        const looksLikeContinuation = strippedNext && strippedNext.length < 40 &&
+          /[A-Za-z]{2,}/.test(strippedNext) && !/\*/.test(strippedNext) && !/\d/.test(strippedNext) &&
+          !/^page\s+\d+/i.test(strippedNext);
+        if (looksLikeContinuation) label = (label + ' ' + strippedNext).trim();
+      }
+      failing.push({ property: label || null, requirement, result: starMatch[0].replace(/\s+/g, ' ').trim() });
+    });
+    return failing;
+  }
+
+  // Pulls individual property/requirement/result rows out of one section's body
+  // text, anchored on "Min."/"Max." tokens (this report format's requirement
+  // values are consistently phrased that way). Any leftover text after the last
+  // recognized row is kept as one raw trailing snippet rather than dropped, since
+  // it's often auxiliary measurements without their own explicit requirement
+  // (e.g. "Fuzzing at 2000 rubs  Grade 4").
+  function parseSectionRows(bodyLines){
+    let cleaned = (bodyLines || []).filter(l => l != null);
+    cleaned = cleaned.filter(l => !/^\s*\([^()]*\)\s*$/.test(l.trim())); // drop lone unit-header lines like "(gram(s))"
+    cleaned = cleaned.map(l => l.replace(/\b(PASS|FAIL|DATA)\b/gi, ' ').trim());
+    // Drop a short leading sample/colour-name remnant (e.g. "Charcoal" left
+    // over after stripping the rating token out of "Charcoal FAIL").
+    if (cleaned.length && cleaned[0] && cleaned[0].length <= 24 &&
+        cleaned[0].split(/\s+/).filter(Boolean).length <= 3 && !/min\.|max\./i.test(cleaned[0])){
+      cleaned = cleaned.slice(1);
+    }
+    const flat = cleaned.join(' ').replace(/\s+/g, ' ').trim();
+    if (!flat) return [];
+
+    const SPEC_CODE = /\b[A-Z0-9]{2,}(?:-[A-Z0-9.]+){2,}(?:\s+(?:GBL[\w\-]*|PHASE))*\b/g;
+    const anchorRe = /(Min\.|Max\.)\s*((?:Grade\s*\d(?:\s*-\s*\d)?)|(?:[\d.,]+\s*(?:kgf?|gram\(s\)|grams?|rubs|mm|cm|n(?![a-z])|%|°c|hours?|cycles?|hrs?)?))/gi;
+    const anchors = [];
+    let m;
+    while ((m = anchorRe.exec(flat))){
+      anchors.push({ index: m.index, end: anchorRe.lastIndex, reqText: (m[1] + ' ' + m[2]).replace(/\s+/g, ' ').trim() });
+    }
+    if (!anchors.length) return [];
+
+    // Result values are captured narrowly on purpose: a "Grade N" result must
+    // stop right after its optional "-N"/"*" suffix, not keep consuming the
+    // next property's own label text (e.g. must not swallow "Fuzzing" out of
+    // "Grade 3 * Fuzzing at 2000 rubs").
+    const RESULT_RE = /^\s*((?:Grade\s*\d(?:\s*-\s*\d)?\s*\*?)|(?:No\s+[a-z]+(?:\s+[a-z]+){0,6}@[^.]{0,40})|(?:Not applicable)|(?:N\/A)|(?:[\d.,]+\s*(?:kgf?|gram\(s\)|grams?|rubs|mm|cm|n(?![a-z])|%|°c)?))/i;
+
+    const rows = [];
+    let lastEnd = 0;
+    anchors.forEach(a => {
+      const labelRaw = flat.slice(lastEnd, a.index).replace(SPEC_CODE, ' ').replace(/\s+/g, ' ').trim();
+      const label = labelRaw.replace(/^[.,;:\-–]+|[.,;:\-–]+$/g, '').trim();
+      const after = flat.slice(a.end);
+      const resMatch = after.match(RESULT_RE);
+      const result = resMatch ? resMatch[1].trim() : null;
+      lastEnd = a.end + (resMatch ? after.indexOf(resMatch[1]) + resMatch[1].length : 0);
+      if (label) rows.push({ property: label, requirement: a.reqText, result });
+    });
+
+    const trailing = flat.slice(lastEnd).replace(SPEC_CODE, ' ').replace(/\s+/g, ' ').trim();
+    if (trailing && trailing.length > 2){
+      rows.push({ property: null, requirement: null, result: null, raw: trailing });
+    }
+
+    return rows;
+  }
+
+  function parseReport(text){
+    const flat = text.replace(/\s+/g, ' '); // collapse all whitespace for marker-based searches
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length);
+
+    const reportNoMatch = text.match(/Test Report:\s*(\(\d+\)[\w-]+)/i) || text.match(/Test Report:\s*(\S+)/i);
+    const reportNo = reportNoMatch ? reportNoMatch[1] : null;
+
+    // Overall verdict: derived from the executive-summary phrasing, which is
+    // present regardless of how the PDF's layout engine broke up lines.
+    let overallVerdict = null;
+    if (/DOES NOT MEET/i.test(flat)) overallVerdict = 'FAIL';
+    else if (/MEET all the tested requirement/i.test(flat)) overallVerdict = 'PASS';
+    else {
+      for (let i = 0; i < Math.min(lines.length, 15); i++){
+        if (/^(PASS|FAIL)$/i.test(lines[i])){ overallVerdict = lines[i].toUpperCase(); break; }
+      }
+    }
+
+    // Executive summary numbered fail list — scan forward, skipping stray
+    // non-matching lines (page artifacts like "###"), stopping at a real
+    // section terminator rather than the first line that doesn't match.
+    const execFails = [];
+    const execIdx = lines.findIndex(l => /DOES NOT MEET/i.test(l));
+    if (execIdx !== -1){
+      const TERMINATOR = /(REMARKS|TECHNICAL\s|GENERAL\s|SIGNATURES)/i;
+      let consecutiveMisses = 0;
+      // Match the NEXT expected number specifically (1., then 2., then 3., ...)
+      // rather than requiring the line to literally start with a digit. A
+      // sidebar label rendered at the same vertical position as the list (e.g.
+      // "EXECUTIVE"/"SUMMARY" wrapping across two lines) can get glued onto the
+      // front of a numbered line by PDF text extraction — requiring the number
+      // to be the very first character silently dropped those items entirely.
+      let expectedNum = 1;
+      for (let i = execIdx, scanned = 0; i < lines.length && scanned < 20; i++, scanned++){
+        const termMatch = lines[i].match(TERMINATOR);
+        const line = termMatch ? lines[i].slice(0, termMatch.index) : lines[i];
+        const re = new RegExp('(?:^|\\s)' + expectedNum + '\\.\\s+(.+)$');
+        const m = line.match(re);
+        if (m){ execFails.push(m[1].replace(/#+\s*$/,'').trim()); expectedNum++; consecutiveMisses = 0; }
+        else if (execFails.length) consecutiveMisses++;
+        if (termMatch || consecutiveMisses >= 4) break;
+      }
+    }
+    // Fallback: same list may have collapsed onto one unbroken line.
+    if (execFails.length === 0){
+      const anchorIdx = flat.search(/DOES NOT MEET[^:]*:/i);
+      if (anchorIdx !== -1){
+        const window = flat.slice(anchorIdx, anchorIdx + 1500);
+        const re = /(\d+)\.\s*(.+?)(?=\s*\d+\.\s|\s*(?:REMARKS|TECHNICAL|GENERAL|SIGNATURES)\b|$)/g;
+        let m;
+        while ((m = re.exec(window))) execFails.push(m[2].replace(/#+\s*$/,'').trim());
+      }
+    }
+
+    // Summary table: locate the "OVERALL RATINGS" marker, then pull (name, rating)
+    // pairs from the following text regardless of whether it's one long run-on
+    // line (common when the PDF positions table cells with absolute Tm offsets)
+    // or genuinely broken into separate lines.
+    const tableResults = [];
+    const ratingsIdx = flat.search(/OVERALL RATINGS/i);
+    if (ratingsIdx !== -1){
+      // Bound the window at the summary table's own natural end (the running
+      // "Page N of M" footer that follows it) rather than a fixed character
+      // count — a fixed-length window can run past the table into the
+      // detailed grid section below, where unrelated "... PASS/FAIL/DATA"
+      // phrases (e.g. "Meet PASS", "Conclusion Pass") get misread as extra
+      // bogus summary rows with garbled run-on names.
+      const searchSpan = flat.slice(ratingsIdx + 'OVERALL RATINGS'.length, ratingsIdx + 6000);
+      const pageMarker = searchSpan.match(/Page\s+\d+\s+of\s+\d+/i);
+      const window = pageMarker
+        ? searchSpan.slice(0, pageMarker.index)
+        : flat.slice(ratingsIdx + 'OVERALL RATINGS'.length, ratingsIdx + 4000);
+      const re = /(.+?)\s+(PASS|FAIL|DATA)\b/g;
+      let m;
+      while ((m = re.exec(window))){
+        const name = m[1].trim();
+        if (name && name.length < 200) tableResults.push({ name, rating: m[2] });
+      }
+    }
+
+    // Detailed per-property grid table ("Tested Property / Requirements / Results
+    // / Rating"), when the report includes one — this is where real actual-vs-
+    // requirement values live, one row per measured property within a test.
+    const detailedSections = findDetailedSections(text);
+
+    // If there was no executive "OVERALL RATINGS" rollup, build the test list
+    // directly from the detailed sections instead (their own rating line).
+    if (!tableResults.length && detailedSections.length){
+      detailedSections.forEach(s => {
+        if (s.rating) tableResults.push({ name: s.shortTitle, rating: s.rating });
+      });
+    }
+
+    // Fibre/fiber content tests are a composition comparison (declared vs. lab-
+    // found percentages), not a Min./Max. threshold, so neither the asterisk nor
+    // the grid-row strategies below apply to them. The declared/actual values are
+    // usually already stated plainly elsewhere in the report — pull those first
+    // so this test type gets a clean row too instead of falling through to a
+    // raw snippet.
+    const claimedMatch = flat.match(/CLAIMED FIBER CONTENT\s+(.+?)\s*(?=TEST TYPE|ACTUAL FIBER CONTENT|$)/i);
+    const actualMatch = flat.match(/ACTUAL FIBER CONTENT\s+(.+?)\s*(?=SUBMITTED CARE|TEST STAGE|RETEST|PREVIOUS REPORT|REVISION REMARK|SIGNATURES|REMARKS|GENERAL\s|$)/i);
+    const claimedFiber = claimedMatch ? claimedMatch[1].trim() : null;
+    const actualFiber = actualMatch ? actualMatch[1].trim() : null;
+
+    // For every FAIL (and DATA, which is often an informational measurement
+    // rather than a clean pass/fail) row, try to pull the actual-vs-requirement
+    // detail from the fuller report body near that test's name — first from a
+    // matching detailed-grid section (most reliable, gives per-property rows),
+    // falling back to the looser inline-keyword search. Pass every other test
+    // name as a boundary list so one test's search window can't spill into a
+    // neighboring test's own requirement/result block.
+    const allTestNames = tableResults.map(t => t.name);
+    const usedSections = new Set();
+    tableResults.forEach(t => {
+      if (t.rating === 'FAIL' || t.rating === 'DATA'){
+        if (/fibre content|fiber content/i.test(t.name) && (claimedFiber || actualFiber)){
+          t.rows = [{
+            property: 'Fibre composition',
+            requirement: claimedFiber ? ('Declared: ' + claimedFiber) : null,
+            result: actualFiber ? ('Lab analysis: ' + actualFiber) : null
+          }];
+        } else {
+          const section = findMatchingSection(detailedSections, t.name, usedSections);
+          if (section){
+            // Asterisk-marked failing measurements first (most reliable — see
+            // findFailingMeasurements above); fall back to the generic Min./Max.
+            // row anchor parser for sections that don't use that convention.
+            const failing = findFailingMeasurements(section.bodyLines);
+            const rows = failing.length ? failing : parseSectionRows(section.bodyLines);
+            if (rows.length) t.rows = rows;
+          }
+        }
+        if (!t.rows) t.detail = extractTestDetail(text, t.name, allTestNames);
+      }
+    });
+
+    let recommendedLabel = null;
+    const recMatch = flat.match(/recommended as\s+(.+?)\s*(?=PASS\b|FAIL\b|DATA\b|$)/i);
+    if (recMatch) recommendedLabel = recMatch[1].replace(/^\/\s*/,'').trim() || null;
+
+    // Build the failure item list used for categorization & the decision cards.
+    // Prefer the executive-summary names (cleaner labels), but pull detail
+    // (requirement/result) from the matching tableResults row when available,
+    // falling back to a fresh text search by name.
+    const failedNames = execFails.length ? execFails : tableResults.filter(t => t.rating === 'FAIL').map(t => t.name);
+    const otherContext = allTestNames.length ? allTestNames : failedNames;
+    const failedItems = failedNames.map(name => {
+      const fromTable = tableResults.find(t => t.name.toLowerCase() === name.toLowerCase());
+      let rows = (fromTable && fromTable.rows) ? fromTable.rows : null;
+      let detail = (fromTable && fromTable.detail) ? fromTable.detail : null;
+      if (!rows && !detail){
+        const section = findMatchingSection(detailedSections, name);
+        if (section){
+          const failing = findFailingMeasurements(section.bodyLines);
+          const r = failing.length ? failing : parseSectionRows(section.bodyLines);
+          if (r.length) rows = r;
+        }
+      }
+      if (!rows && !detail) detail = extractTestDetail(text, name, otherContext);
+      return { name, rows, detail };
+    });
+
+    return { reportNo, overallVerdict, execFails, tableResults, claimedFiber, actualFiber, recommendedLabel, failedNames, failedItems };
+  }
+
+  // ================= Categorization & decision logic =================
+  const CATEGORY_RULES = [
+    { key:'safety', label:'Safety / Chemical', urgent:true, test:/flammability|\bph\b|azo|formaldehyde|chemical|lead|phthalate/i,
+      action:'Safety-related failure — escalate immediately. Do not proceed regardless of other results, and do not treat this as a routine retest.' },
+    { key:'composition', label:'Composition / Labeling', test:/fibre content|fiber content/i,
+      action:'Declared composition does not match lab analysis. Needs a label correction and/or a fabric substitution investigation with the supplier before proceeding — this is a compliance issue, not just a paperwork fix.' },
+    { key:'structural', label:'Structural / Strength', test:/seam|tensile|tear|burst|elongation|grab method|strength|elasticity/i,
+      action:'Structural or strength failure — suggests a fabric or construction weakness rather than test variance. Route to supplier for root-cause investigation; requires a physical retest once corrected, not a self-approval.' },
+    { key:'colourfastness', label:'Colourfastness / Dyeing', test:/colourfastness|color ?fastness|staining/i,
+      action:'Colourfastness failure — likely a dyeing or finishing issue with this batch. Flag to supplier for dye-lot investigation and retest.' },
+    { key:'dimensional', label:'Dimensional Stability', test:/dimensional|shrinkage/i,
+      action:'Dimensional stability failure — check the finishing or pre-shrink process with the supplier.' },
+    { key:'durability', label:'Durability / Wear', test:/pilling|abrasion|martindale|fuzzing/i,
+      action:'Durability failure — review fabric construction or finishing with the supplier.' }
+  ];
+
+  function categorizeFailures(failedItems){
+    const buckets = {};
+    failedItems.forEach(item => {
+      const name = item.name;
+      let matched = false;
+      for (const rule of CATEGORY_RULES){
+        if (rule.test.test(name)){
+          if (!buckets[rule.key]) buckets[rule.key] = { label: rule.label, urgent: !!rule.urgent, action: rule.action, tests: [] };
+          buckets[rule.key].tests.push(item);
+          matched = true;
+          break;
+        }
+      }
+      if (!matched){
+        if (!buckets.other) buckets.other = { label:'Other', urgent:false, action:'Review this specific requirement with fabric tech — does not fall into a standard category.', tests: [] };
+        buckets.other.tests.push(item);
+      }
+    });
+    return buckets;
+  }
+
+  function fiberMismatch(claimed, actual, recommended){
+    if (!claimed || !actual) return false;
+    const norm = s => s.toUpperCase().replace(/[^A-Z0-9%]/g,'');
+    return norm(claimed) !== norm(actual) || !!recommended;
+  }
+
+  function decide(parsed){
+    const buckets = categorizeFailures(parsed.failedItems);
+    const hasFail = parsed.overallVerdict === 'FAIL' || parsed.failedItems.length > 0;
+    const hasUrgent = Object.values(buckets).some(b => b.urgent);
+    const fiberFlag = fiberMismatch(parsed.claimedFiber, parsed.actualFiber, parsed.recommendedLabel);
+
+    let decision, decisionClass, headline;
+    if (hasUrgent){
+      decision = 'REJECT — URGENT ESCALATION'; decisionClass = 'reject'; headline='Safety-related failure present';
+    } else if (hasFail){
+      decision = 'REJECT — RETEST'; decisionClass = 'reject'; headline='One or more requirements failed';
+    } else if (fiberFlag){
+      decision = 'APPROVE — WITH NOTE'; decisionClass = 'approve'; headline='All tests passed; composition note to review';
+    } else {
+      decision = 'APPROVE'; decisionClass = 'approve'; headline='All tests met requirements';
+    }
+    return { decision, decisionClass, headline, buckets, hasFail, fiberFlag };
+  }
+
+  // ================= Rendering =================
+  function escapeHtml(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  // Renders the "Required: X · Actual: Y" (or raw-snippet fallback) line for a
+  // single failed test's detail object. Returns '' when nothing was extracted.
+  function renderTestDetailHtml(detail){
+    if (!detail) return '';
+    if (detail.requirement || detail.result){
+      return ' <span class="test-detail">— Required: ' + escapeHtml(detail.requirement || '—') +
+             ' · Actual: ' + escapeHtml(detail.result || '—') + '</span>';
+    }
+    if (detail.raw){
+      return ' <span class="test-detail raw">— nearby report text: "' + escapeHtml(detail.raw) + '"</span>';
+    }
+    return '';
+  }
+
+  // Renders a small property/requirement/result table for a failed test that
+  // has multiple measured sub-properties (e.g. "Pilling at 2000 Rubs",
+  // "Fuzzing at 2000 rubs" under one "Martindale pilling" test) — pulled from
+  // extractTestDetail's companion grid-table parser.
+  function renderRowsTableHtml(rows){
+    if (!rows || !rows.length) return '';
+    const dataRows = rows.filter(r => r.property);
+    const trailingRaw = rows.find(r => r.raw);
+    let html = '';
+    if (dataRows.length){
+      html += '<table class="tests" style="margin-top:6px;margin-bottom:6px;">' +
+        '<thead><tr><th>Property</th><th>Requirement</th><th>Result</th></tr></thead><tbody>' +
+        dataRows.map(r => `<tr><td>${escapeHtml(r.property)}</td><td>${escapeHtml(r.requirement || '—')}</td><td>${escapeHtml(r.result || '—')}</td></tr>`).join('') +
+        '</tbody></table>';
+    }
+    if (trailingRaw){
+      html += `<div class="test-detail raw">Additional reported values (unlabeled): "${escapeHtml(trailingRaw.raw)}"</div>`;
+    }
+    return html;
+  }
+
+  function renderSummaryBar(){
+    if (!reportCardsMeta.length){ summaryBarWrap.innerHTML = ''; return; }
+    const approve = reportCardsMeta.filter(r => r.decisionClass === 'approve').length;
+    const reject = reportCardsMeta.filter(r => r.decisionClass === 'reject').length;
+    summaryBarWrap.innerHTML = `
+      <div class="summary-bar">
+        <div class="counts">
+          <div><span class="n">${reportCardsMeta.length}</span>report(s) loaded</div>
+          <div class="c-approve"><span class="n">${approve}</span>approve</div>
+          <div class="c-reject"><span class="n">${reject}</span>reject / retest</div>
+        </div>
+        <button class="ghost" id="clearAllBtn">Clear all reports</button>
+      </div>`;
+    document.getElementById('clearAllBtn').addEventListener('click', () => {
+      resultsWrap.innerHTML = '';
+      reportCardsMeta = [];
+      renderSummaryBar();
+      renderDashboard();
+      refreshEmptyState();
+    });
+  }
+
+  // ---- Dashboard: aggregates every currently-loaded report into one view ----
+  function computeAggregates(){
+    const total = reportCardsMeta.length;
+    const approve = reportCardsMeta.filter(r => r.decisionClass === 'approve').length;
+    const reject = reportCardsMeta.filter(r => r.decisionClass === 'reject').length;
+    const urgentReports = reportCardsMeta.filter(r => r.hasUrgent);
+    const fiberReports = reportCardsMeta.filter(r => r.fiberFlag);
+
+    const catTotals = {}; // key -> {label, count, urgent}
+    reportCardsMeta.forEach(r => r.categories.forEach(c => {
+      if (!catTotals[c.key]) catTotals[c.key] = { label: c.label, count: 0, urgent: c.urgent };
+      catTotals[c.key].count += c.count;
+    }));
+    const catList = Object.values(catTotals).sort((a,b) => b.count - a.count);
+
+    return { total, approve, reject, urgentReports, fiberReports, catList };
+  }
+
+  function renderDashboard(){
+    if (!reportCardsMeta.length){ dashboardWrap.innerHTML = ''; return; }
+    const a = computeAggregates();
+    const maxCat = Math.max(1, ...a.catList.map(c => c.count));
+    const approvePct = a.total ? Math.round((a.approve / a.total) * 100) : 0;
+
+    const catHtml = a.catList.length ? a.catList.map(c => `
+      <div class="barchart-row">
+        <div class="bc-label">${escapeHtml(c.label)}</div>
+        <div class="bc-track"><div class="bc-fill ${c.urgent?'urgent':''}" style="width:${Math.round((c.count/maxCat)*100)}%"></div></div>
+        <div class="bc-n">${c.count}</div>
+      </div>`).join('') : '<div class="dash-empty">No failing test categories across loaded reports.</div>';
+
+    const donutHtml = `
+      <div class="donut-wrap">
+        ${buildDonutSvg(a.approve, a.reject)}
+        <div class="donut-legend">
+          <div class="leg-row"><span class="swatch" style="background:var(--stamp-green)"></span>Approve · ${a.approve} (${approvePct}%)</div>
+          <div class="leg-row"><span class="swatch" style="background:var(--stamp-red)"></span>Reject / retest · ${a.reject} (${100-approvePct}%)</div>
+        </div>
+      </div>`;
+
+    const flaggedRows = [
+      ...a.urgentReports.map(r => `<div class="flagged-row"><span>${escapeHtml(r.reportNo)}</span><span class="fr-tag urgent">SAFETY — ESCALATE</span></div>`),
+      ...a.fiberReports.map(r => `<div class="flagged-row"><span>${escapeHtml(r.reportNo)}</span><span class="fr-tag fiber">FIBRE MISMATCH</span></div>`)
+    ].join('');
+
+    dashboardWrap.innerHTML = `
+      <div class="dashboard">
+        <div class="dashboard-head">
+          <div>
+            <div class="eyebrow">Combined view · ${a.total} report(s)</div>
+            <h2>Dashboard</h2>
+          </div>
+          <button class="dashboard-toggle" id="dashToggleBtn">${dashboardCollapsed ? 'Show' : 'Hide'}</button>
+        </div>
+        <div class="dashboard-body" id="dashboardBody" style="${dashboardCollapsed ? 'display:none;' : ''}">
+          <div class="stat-tiles">
+            <div class="stat-tile"><div class="stat-n">${a.total}</div><div class="stat-lbl">Reports loaded</div></div>
+            <div class="stat-tile approve"><div class="stat-n">${a.approve}</div><div class="stat-lbl">Approved</div></div>
+            <div class="stat-tile reject"><div class="stat-n">${a.reject}</div><div class="stat-lbl">Reject / retest</div></div>
+            <div class="stat-tile urgent"><div class="stat-n">${a.urgentReports.length}</div><div class="stat-lbl">Safety escalations</div></div>
+            <div class="stat-tile fiber"><div class="stat-n">${a.fiberReports.length}</div><div class="stat-lbl">Fibre mismatches</div></div>
+          </div>
+          <div class="dash-grid">
+            <div class="dash-col">
+              <h3>Failures by category (all reports)</h3>
+              ${catHtml}
+            </div>
+            <div class="dash-col">
+              <h3>Approve vs. reject</h3>
+              ${donutHtml}
+              ${flaggedRows ? `<div class="flagged-list"><h3 style="margin-top:16px;">Flagged reports</h3>${flaggedRows}</div>` : ''}
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+    document.getElementById('dashToggleBtn').addEventListener('click', () => {
+      dashboardCollapsed = !dashboardCollapsed;
+      renderDashboard();
+    });
+  }
+
+  // Minimal hand-rolled donut chart — two-segment case (approve/reject), no library.
+  function buildDonutSvg(approve, reject){
+    const total = approve + reject;
+    const r = 40, cx = 50, cy = 50, stroke = 16;
+    const circumference = 2 * Math.PI * r;
+    if (!total){
+      return `<svg width="100" height="100" viewBox="0 0 100 100"><circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--line)" stroke-width="${stroke}"/></svg>`;
+    }
+    const approveLen = (approve/total) * circumference;
+    const rejectLen = circumference - approveLen;
+    // Reject arc first (base), approve arc drawn on top starting at 12 o'clock.
+    return `
+      <svg width="100" height="100" viewBox="0 0 100 100">
+        <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--stamp-red)" stroke-width="${stroke}"
+          stroke-dasharray="${rejectLen} ${circumference}" stroke-dashoffset="0" transform="rotate(-90 ${cx} ${cy})"/>
+        <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--stamp-green)" stroke-width="${stroke}"
+          stroke-dasharray="${approveLen} ${circumference}" stroke-dashoffset="${-rejectLen}" transform="rotate(-90 ${cx} ${cy})"/>
+      </svg>`;
+  }
+
+  function renderResult(parsed, fileLabel){
+    const d = decide(parsed);
+    cardCounter++;
+    const cardId = 'card' + cardCounter;
+    const hasUrgent = Object.values(d.buckets).some(b => b.urgent);
+    const categories = Object.entries(d.buckets).map(([key,b]) => ({ key, label: b.label, count: b.tests.length, urgent: b.urgent }));
+    reportCardsMeta.push({
+      id: cardId, decisionClass: d.decisionClass,
+      reportNo: parsed.reportNo || ('Report #' + cardCounter),
+      verdict: parsed.overallVerdict || (d.hasFail ? 'FAIL' : 'PASS'),
+      hasUrgent, fiberFlag: d.fiberFlag, categories
+    });
+
+    const anyDetailFound = Object.values(d.buckets).some(b => b.tests.some(item => item.detail || item.rows));
+    // Category + suggested-action for a failed test, folded into the Full Test
+    // Breakdown table below as two extra columns instead of a separate card
+    // section. Matched directly against the category rules (same as
+    // categorizeFailures) rather than joined by name against parsed.failedItems
+    // — tableResults names sometimes carry a trailing spec-code suffix (e.g.
+    // "... ASOS-SL-00291.05-GBL-MULTI PHASE") that the executive-summary-derived
+    // failedItems names don't, which broke an exact-name lookup.
+    function categoryForName(name){
+      for (const rule of CATEGORY_RULES){
+        if (rule.test.test(name)) return { label: rule.label, action: rule.action, urgent: !!rule.urgent };
+      }
+      return { label: 'Other', action: 'Review this specific requirement with fabric tech — does not fall into a standard category.', urgent: false };
+    }
+
+    const fiberHtml = (parsed.claimedFiber || parsed.actualFiber) ? `
+      <div class="section">
+        <h3>Fibre content — claimed vs. lab analysis</h3>
+        <div class="fiber-compare">
+          <div class="fiber-col"><div class="lbl">Claimed</div><div class="val">${escapeHtml(parsed.claimedFiber||'—')}</div></div>
+          <div class="fiber-col"><div class="lbl">Lab analysis</div><div class="val">${escapeHtml(parsed.actualFiber||'—')}</div></div>
+        </div>
+        ${parsed.recommendedLabel ? `<div class="note-box">Lab-recommended label: ${escapeHtml(parsed.recommendedLabel)}</div>` : ''}
+      </div>` : '';
+
+    const tableHtml = parsed.tableResults.length ? `
+      <div class="section">
+        <details open>
+          <summary>Full test breakdown (${parsed.tableResults.length} tests)</summary>
+          ${anyDetailFound ? '<div class="extract-note">Requirement/Result columns are auto-extracted from text near each test name — verify against the source PDF, especially for the raw-snippet cases.</div>' : ''}
+          <table class="tests">
+            <thead><tr><th>Test</th><th>Requirement</th><th>Result</th><th>Rating</th><th>Category</th><th>Suggested Action</th></tr></thead>
+            <tbody>${parsed.tableResults.map(t => {
+              const dt = t.detail;
+              let reqCell = '<span class="detail-na">—</span>';
+              let resCell = '<span class="detail-na">—</span>';
+              const cat = t.rating === 'FAIL' ? categoryForName(t.name) : null;
+              const catCell = cat ? escapeHtml(cat.label) : '<span class="detail-na">—</span>';
+              const actionCell = cat ? escapeHtml(cat.action) : '<span class="detail-na">—</span>';
+              const rowClass = cat && cat.urgent ? ' class="urgent-row"' : (t.rating === 'FAIL' ? ' class="fail-row"' : '');
+              if (t.rows && t.rows.length){
+                const dataRows = t.rows.filter(r => r.property);
+                const rawRow = t.rows.find(r => r.raw);
+                if (dataRows.length === 1){
+                  const r = dataRows[0];
+                  reqCell = r.requirement ? escapeHtml(r.requirement) : '<span class="detail-na">—</span>';
+                  resCell = r.result ? escapeHtml(r.result) : '<span class="detail-na">—</span>';
+                } else if (dataRows.length > 1){
+                  // Several measured sub-properties under one test (e.g. four
+                  // rubbing-fastness directions). Show the requirement once if
+                  // every row shares it, otherwise per-property; results are
+                  // always shown per-property since those genuinely differ.
+                  const uniqueReqs = [...new Set(dataRows.map(r => r.requirement).filter(Boolean))];
+                  reqCell = uniqueReqs.length === 1
+                    ? escapeHtml(uniqueReqs[0])
+                    : dataRows.map(r => `<div>${escapeHtml(r.property)}: ${escapeHtml(r.requirement || '—')}</div>`).join('');
+                  resCell = dataRows.map(r => `<div>${escapeHtml(r.property)}: ${escapeHtml(r.result || '—')}</div>`).join('');
+                }
+                if (rawRow){
+                  const shown = rawRow.raw.length > 90 ? rawRow.raw.slice(0, 90) + '…' : rawRow.raw;
+                  const rawHtml = '<div class="detail-raw" title="' + escapeHtml(rawRow.raw) + '">' + (dataRows.length ? '+ ' : '') + escapeHtml(shown) + '</div>';
+                  resCell = dataRows.length ? resCell + rawHtml : rawHtml;
+                  if (!dataRows.length) reqCell = '<span class="detail-na">—</span>';
+                }
+              } else if (dt && (dt.requirement || dt.result)){
+                reqCell = dt.requirement ? escapeHtml(dt.requirement) : '<span class="detail-na">—</span>';
+                resCell = dt.result ? escapeHtml(dt.result) : '<span class="detail-na">—</span>';
+              } else if (dt && dt.raw){
+                // Show the raw nearby-text snippet directly rather than hiding it
+                // behind a hover tooltip — a truncated but visible value beats
+                // one the reader has to discover by hovering.
+                const shown = dt.raw.length > 90 ? dt.raw.slice(0, 90) + '…' : dt.raw;
+                resCell = '<span class="detail-raw" title="' + escapeHtml(dt.raw) + '">' + escapeHtml(shown) + '</span>';
+              }
+              // Wrap the Result cell in a red-text span for FAIL rows so the
+              // actual failing value stands out, on top of the row tint.
+              const resCellOut = t.rating === 'FAIL' ? `<span class="fail-value">${resCell}</span>` : resCell;
+              return `<tr${rowClass}><td>${escapeHtml(t.name)}</td><td>${reqCell}</td><td>${resCellOut}</td><td><span class="badge ${t.rating}">${t.rating}</span></td><td>${catCell}</td><td>${actionCell}</td></tr>`;
+            }).join('')}</tbody>
+          </table>
+        </details>
+      </div>` : '';
+
+    const card = document.createElement('div');
+    card.className = 'result-card';
+    card.id = cardId;
+    card.innerHTML = `
+        <div class="result-head">
+          <div>
+            <div class="headtop">
+              <span class="cardnum">#${cardCounter}</span>
+              <div class="reportno">${escapeHtml(parsed.reportNo || 'Report number not found')}</div>
+            </div>
+            ${fileLabel ? `<div class="sourcefile">${escapeHtml(fileLabel)}</div>` : ''}
+            <h2>${escapeHtml(d.headline)}</h2>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div class="stamp ${d.decisionClass}">${escapeHtml(d.decision)}</div>
+          </div>
+        </div>
+        <div class="result-body">
+          ${fiberHtml}
+          ${tableHtml}
+        </div>
+        <div class="decision-block">
+          <h3>Log decision</h3>
+          <div class="decision-btns">
+            <div class="dbtn approve" data-decision="Approved">Approve</div>
+            <div class="dbtn reject" data-decision="Reject — Retest">Reject, retest</div>
+            <div class="dbtn escalate" data-decision="Escalate">Escalate</div>
+          </div>
+          <input class="name-input decidedBy" placeholder="Decided by (your name)">
+          <textarea class="comment decisionComment" rows="2" placeholder="Comment / reasoning (optional)"></textarea>
+          <button class="saveDecisionBtn" style="width:100%;">Save to decision log</button>
+          <div class="saved-tag"></div>
+        </div>
+        <div style="padding:10px 24px;text-align:right;">
+          <button class="removeCardBtn">Remove this report</button>
+        </div>`;
+    resultsWrap.appendChild(card);
+
+    let chosen = d.decisionClass === 'reject' ? 'Reject — Retest' : 'Approved';
+    card.querySelectorAll('.dbtn').forEach(btn => {
+      if (btn.dataset.decision === chosen) btn.classList.add('sel');
+      btn.addEventListener('click', () => {
+        card.querySelectorAll('.dbtn').forEach(b => b.classList.remove('sel'));
+        btn.classList.add('sel');
+        chosen = btn.dataset.decision;
+      });
+    });
+
+    card.querySelector('.saveDecisionBtn').addEventListener('click', () => {
+      const by = card.querySelector('.decidedBy').value.trim() || 'Unspecified';
+      const comment = card.querySelector('.decisionComment').value.trim();
+      decisionLog.push({
+        reportNo: parsed.reportNo || '(unknown)',
+        sourceFile: fileLabel || '(pasted text)',
+        verdict: parsed.overallVerdict || (d.hasFail ? 'FAIL' : 'PASS'),
+        decision: chosen, comment, by, date: new Date().toISOString().slice(0,10)
+      });
+      card.querySelector('.saved-tag').textContent = '✓ Saved to decision log below';
+      renderLog();
+    });
+
+    card.querySelector('.removeCardBtn').addEventListener('click', () => {
+      card.remove();
+      reportCardsMeta = reportCardsMeta.filter(r => r.id !== cardId);
+      renderSummaryBar();
+      renderDashboard();
+      refreshEmptyState();
+    });
+
+    renderSummaryBar();
+    renderDashboard();
+    refreshEmptyState();
+  }
+
+  function renderLog(){
+    if (!decisionLog.length) return;
+    logSection.style.display = 'block';
+    exportBar.style.display = 'flex';
+    footerCount.textContent = decisionLog.length + ' decision' + (decisionLog.length===1?'':'s') + ' logged';
+    logTable.innerHTML = `
+      <thead><tr><th>Report No.</th><th>Source File</th><th>Lab Verdict</th><th>Decision</th><th>Comment</th><th>By</th><th>Date</th></tr></thead>
+      <tbody>${decisionLog.map(d => `<tr>
+        <td>${escapeHtml(d.reportNo)}</td>
+        <td>${escapeHtml(d.sourceFile)}</td>
+        <td><span class="badge ${d.verdict}">${d.verdict}</span></td>
+        <td>${escapeHtml(d.decision)}</td>
+        <td>${escapeHtml(d.comment)}</td>
+        <td>${escapeHtml(d.by)}</td>
+        <td>${escapeHtml(d.date)}</td>
+      </tr>`).join('')}</tbody>`;
+  }
+
+  document.getElementById('exportLogBtn').addEventListener('click', () => {
+    const headers = ['Report No.','Source File','Lab Verdict','Decision','Comment','Decided By','Date'];
+    const esc = v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"';
+    const csv = [headers.map(esc).join(','), ...decisionLog.map(d => [d.reportNo,d.sourceFile,d.verdict,d.decision,d.comment,d.by,d.date].map(esc).join(','))].join('\r\n');
+    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'report_decisions_' + new Date().toISOString().slice(0,10) + '.csv';
+    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+  });
+
+  refreshEmptyState();
+})();
+</script>
+</body>
+</html>
