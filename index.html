@@ -1,4 +1,29 @@
 <!DOCTYPE html>
+<!--
+  Test Report Interpreter & Decision Log
+  Version:  1.3  (25 November 2026)
+  Owner:    Anamika Sengupta, Fabric Technologist - Menswear & Venture Brands, ASOS
+  Purpose:  Reads Bureau Veritas and SGS test reports, checks them against the ASOS test
+            requirement matrix and gives an approve/reject decision, failure
+            categories, a suggested action per failed test and a supplier email draft.
+  Built:    Business logic, decision rules, grade acceptance policy, test matrix and code developed,
+            defined and tested by the owner; code verified, debugged and tested with
+            an AI coding assistant (Claude). No report data is sent to any AI
+            service when the tool runs.
+  Changes:  1.1 - Suggested action now based on grade shortfall: up to 1/2 grade =
+            "1/2 grade failure can be accepted commercially"; more than 1/2 grade or
+            non-graded failures = "Concerned fabric technologist's review is required."
+            1.2 - Seam, tensile and tear failures analysed by direction: the Result column
+            flags warp way / weft way (for seams: slippage or strength, and mode of
+            failure), also shown in the suggested action and supplier email.
+            Denim: any dry rub at grade 3 or lower = fabric technologist review, even
+            when the rubbing test passes.
+            1.3 - SGS reports supported: PDF reader now decodes Word-style (Type0 /
+            ToUnicode) fonts; SGS summary ratings M / F / I / * read per test, with
+            overall conclusion, report no., manufacturer, client requirement and
+            results from each test's detail page. Inconclusive (I) = fabric
+            technologist review. Bureau Veritas reading is unchanged.
+-->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -140,6 +165,12 @@
   table.tests tr.fail-row td{background:var(--stamp-red-bg);}
   table.tests tr.urgent-row td{background:#EBD3CE;}
   table.tests .fail-value{color:var(--stamp-red);font-weight:700;}
+  table.tests tr.review-row td{background:#FBF1DC;}
+  table.tests .dir-line{margin-bottom:4px;}
+  table.tests .dir-flag{display:inline-block;font-weight:700;font-size:11px;padding:1px 6px;border-radius:2px;margin-right:4px;}
+  table.tests .dir-flag.fail{background:var(--stamp-red-bg);color:var(--stamp-red);}
+  table.tests .dir-flag.ok{background:var(--stamp-green-bg);color:var(--stamp-green);}
+  table.tests .action-note{margin-top:4px;font-size:11.5px;font-weight:700;color:var(--stamp-red);}
   .badge{display:inline-block;font-family:'Consolas','Courier New',monospace;font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:2px;}
   .badge.PASS{background:var(--stamp-green-bg);color:var(--stamp-green);}
   .badge.FAIL{background:var(--stamp-red-bg);color:var(--stamp-red);}
@@ -201,7 +232,7 @@
       <li><b>Or paste the text</b> — open each PDF, select all (Ctrl/Cmd+A), copy, and paste into the box. You can paste multiple reports one after another into the same box — the tool automatically splits them wherever a new "Test Report:" begins.</li>
     </ol>
     <!-- Hidden from the visible page per request, kept here for reference:
-    <div style="margin-top:8px;color:var(--stamp-slate);">PDF reading is done with a text extractor written from scratch  — tested against real Bureau Veritas reports, but PDF internals vary by generator. If extraction looks wrong or incomplete for a given report, the paste method will always be the reliable fallback.</div>
+    <div style="margin-top:8px;color:var(--stamp-slate);">PDF reading is done with a text extractor written from scratch  — tested against real Bureau Veritas and SGS reports, but PDF internals vary by generator. If extraction looks wrong or incomplete for a given report, the paste method will always be the reliable fallback.</div>
     <div style="margin-top:8px;color:var(--stamp-slate);">For failed tests, the tool now also tries to pull the <b>actual measured result</b> and the <b>requirement/limit</b> it was checked against — including full per-property breakdown tables for Bureau Veritas–style detailed results grids (Tested Property / Requirements / Results / Rating). This is heuristic — layout varies by report generator — so always cross-check flagged values against the source PDF. If it's missing or wrong for your reports, share a redacted sample and the extraction can be tuned further.</div>
     -->
   </div>
@@ -525,7 +556,14 @@
         }
       }
       if (c === '[' || c === ']' || c === '{' || c === '}'){ i++; continue; }
-      if (c === '/'){ i++; while(i<n && /[^\s/\[\]<>()%]/.test(s[i])) i++; continue; }
+      if (c === '/'){
+        // Names are kept as tokens so the font operator (/F1 9 Tf) can be
+        // read; everything else ignores them.
+        let start = i + 1; i++;
+        while(i<n && /[^\s/\[\]<>()%]/.test(s[i])) i++;
+        tokens.push({t:'name', v: s.slice(start, i)});
+        continue;
+      }
       if (/[-+.\d]/.test(c)){
         let start=i; i++;
         while (i<n && /[-+.\d]/.test(s[i])) i++;
@@ -573,8 +611,10 @@
     return [m[0]*x + m[2]*y + m[4], m[1]*x + m[3]*y + m[5]];
   }
 
-  function pdfTokensToRuns(tokens){
+  function pdfTokensToRuns(tokens, fontMap){
     const runs = [];
+    let lastName = null;
+    let font = null;
     let ctm = [1,0,0,1,0,0];
     let ctmStack = [];
     let tm = [1,0,0,1,0,0];
@@ -594,10 +634,12 @@
 
     for (const tok of tokens){
       if (tok.t === 'num'){ nums.push(tok.v); continue; }
-      if (tok.t === 'str'){ pendingStrings.push(tok.v); continue; }
+      if (tok.t === 'name'){ lastName = tok.v; continue; }
+      if (tok.t === 'str'){ pendingStrings.push(font ? decodeWithFont(tok.v, font) : tok.v); continue; }
       if (tok.t === 'op'){
         const v = tok.v;
-        if (v === 'q'){ ctmStack.push(ctm.slice()); }
+        if (v === 'Tf'){ font = (fontMap && lastName && fontMap[lastName]) || null; }
+        else if (v === 'q'){ ctmStack.push(ctm.slice()); }
         else if (v === 'Q'){ ctm = ctmStack.pop() || ctm; }
         else if (v === 'cm'){ if (nums.length >= 6) ctm = mat3mul(nums.slice(-6), ctm); }
         else if (v === 'BT'){ tm = [1,0,0,1,0,0]; tlm = [1,0,0,1,0,0]; }
@@ -659,10 +701,183 @@
     }).join('\n');
   }
 
+  // ---- Composite (Type0) fonts ----
+  // Reports generated from Microsoft Word (e.g. SGS) draw most text with
+  // Type0 / Identity-H fonts: each character is a 2-byte glyph code, not a
+  // letter, and only the font's ToUnicode map says which letter it is.
+  // Without this, such text comes out shifted ("S+\x039DOXH" instead of
+  // "pH Value"). Only Type0 fonts are decoded this way; simple fonts
+  // (everything in the Bureau Veritas reports) are read exactly as before.
+  const WIN_ANSI_REVERSE = {};
+  Object.keys(WIN_ANSI_HIGH).forEach(k => { WIN_ANSI_REVERSE[WIN_ANSI_HIGH[k]] = Number(k); });
+
+  function pdfDictValue(raw, key){
+    // Returns the raw value after /key: a balanced << >> dict, a [ ] array,
+    // an "N 0 R" reference or a single token.
+    const re = new RegExp('/' + key + '(?![A-Za-z0-9])\\s*');
+    const m = re.exec(raw);
+    if (!m) return null;
+    let i = m.index + m[0].length;
+    if (raw.startsWith('<<', i)){
+      let depth = 0, j = i;
+      while (j < raw.length){
+        if (raw.startsWith('<<', j)){ depth++; j += 2; continue; }
+        if (raw.startsWith('>>', j)){ depth--; j += 2; if (!depth) break; continue; }
+        j++;
+      }
+      return raw.slice(i, j);
+    }
+    if (raw[i] === '['){ const j = raw.indexOf(']', i); return raw.slice(i, j === -1 ? raw.length : j + 1); }
+    const ref = raw.slice(i).match(/^(\d+)\s+\d+\s+R/);
+    if (ref) return ref[0];
+    const tok = raw.slice(i).match(/^[^\s/\[\]<>()]+|^\/[^\s/\[\]<>()]+/);
+    return tok ? tok[0] : null;
+  }
+  function pdfResolve(objects, val){
+    // Follows an "N 0 R" reference to that object's raw text.
+    if (!val) return null;
+    const ref = String(val).match(/^(\d+)\s+\d+\s+R$/);
+    if (ref) return objects[ref[1]] ? objects[ref[1]].raw : null;
+    return val;
+  }
+  function utf16beHex(hex){
+    let s = '';
+    for (let k = 0; k + 4 <= hex.length; k += 4) s += String.fromCharCode(parseInt(hex.slice(k, k + 4), 16));
+    if (hex.length % 4 === 2) s += String.fromCharCode(parseInt(hex.slice(-2), 16));
+    return s;
+  }
+  function parseToUnicodeCMap(text){
+    const map = {};
+    let codeLen = 2;
+    const cs = text.match(/begincodespacerange\s*<([0-9A-Fa-f]+)>/);
+    if (cs) codeLen = Math.max(1, cs[1].length / 2);
+    let m;
+    const blockChar = /beginbfchar([\s\S]*?)endbfchar/g;
+    while ((m = blockChar.exec(text))){
+      const pair = /<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]*)>/g;
+      let p;
+      while ((p = pair.exec(m[1]))) map[parseInt(p[1], 16)] = utf16beHex(p[2]);
+    }
+    const blockRange = /beginbfrange([\s\S]*?)endbfrange/g;
+    while ((m = blockRange.exec(text))){
+      const rng = /<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(?:<([0-9A-Fa-f]*)>|\[([^\]]*)\])/g;
+      let r;
+      while ((r = rng.exec(m[1]))){
+        const lo = parseInt(r[1], 16), hi = parseInt(r[2], 16);
+        if (hi - lo > 0xFFFF) continue;
+        if (r[3] !== undefined){
+          const base = r[3];
+          const lastVal = parseInt(base.slice(-4) || '0', 16);
+          for (let c = lo; c <= hi; c++){
+            map[c] = utf16beHex(base.slice(0, -4)) + String.fromCharCode(lastVal + (c - lo));
+          }
+        } else {
+          const list = (r[4].match(/<([0-9A-Fa-f]*)>/g) || []).map(x => x.slice(1, -1));
+          list.forEach((h, k) => { map[lo + k] = utf16beHex(h); });
+        }
+      }
+    }
+    return { map, codeLen };
+  }
+  function decodeWithFont(str, font){
+    if (!font || !font.cmap) return str;
+    // Strings were read through the WinAnsi-decoded stream; turn each char
+    // back into its original byte before looking up the glyph code.
+    const bytes = [];
+    for (const ch of str){
+      const b = WIN_ANSI_REVERSE[ch] !== undefined ? WIN_ANSI_REVERSE[ch] : ch.charCodeAt(0);
+      bytes.push(b & 0xFF);
+    }
+    const len = font.cmap.codeLen;
+    let out = '';
+    for (let k = 0; k + len <= bytes.length; k += len){
+      let code = 0;
+      for (let j = 0; j < len; j++) code = (code << 8) | bytes[k + j];
+      const u = font.cmap.map[code];
+      out += (u !== undefined) ? u : '';
+    }
+    return out;
+  }
+
+  async function readStreamText(bytes, binStr, obj){
+    const sb = getPdfStreamBytes(bytes, obj.raw, obj.start, binStr);
+    if (!sb) return null;
+    try {
+      const data = /\/Filter\s*\/FlateDecode/.test(obj.raw) ? await inflateZlib(sb) : sb;
+      return bytesToBinaryString(data);
+    } catch(e){ return null; }
+  }
+
+  // Builds { contentStreamObjectId: { fontResourceName: font } } for every
+  // page and form XObject, decoding ToUnicode maps for Type0 fonts only.
+  async function buildFontMaps(objects, bytes, binStr){
+    const fontCache = {};
+    async function fontFor(ref){
+      const id = (String(ref).match(/^(\d+)\s+\d+\s+R$/) || [])[1];
+      if (!id || !objects[id]) return null;
+      if (fontCache[id] !== undefined) return fontCache[id];
+      const raw = objects[id].raw;
+      let font = null;
+      if (/\/Subtype\s*\/Type0/.test(raw)){
+        const tu = pdfDictValue(raw, 'ToUnicode');
+        const tuId = tu && (tu.match(/^(\d+)\s+\d+\s+R$/) || [])[1];
+        if (tuId && objects[tuId]){
+          const cmapText = await readStreamText(bytes, binStr, objects[tuId]);
+          if (cmapText) font = { cmap: parseToUnicodeCMap(cmapText) };
+        }
+      }
+      fontCache[id] = font;
+      return font;
+    }
+    async function fontMapFromResources(resRaw){
+      if (!resRaw) return null;
+      const fontDict = pdfResolve(objects, pdfDictValue(resRaw, 'Font'));
+      if (!fontDict) return null;
+      const map = {};
+      const re = /\/([^\s/\[\]<>()]+)\s+(\d+\s+\d+\s+R)/g;
+      let m;
+      while ((m = re.exec(fontDict))){
+        const f = await fontFor(m[2]);
+        if (f) map[m[1]] = f;
+      }
+      return Object.keys(map).length ? map : null;
+    }
+    const byStream = {};
+    for (const id in objects){
+      const raw = objects[id].raw;
+      const isPage = /\/Type\s*\/Page(?![s\w])/.test(raw);
+      const isForm = /\/Subtype\s*\/Form/.test(raw);
+      if (!isPage && !isForm) continue;
+      let resRaw = pdfResolve(objects, pdfDictValue(isForm ? raw.slice(0, raw.indexOf('stream') === -1 ? raw.length : raw.indexOf('stream')) : raw, 'Resources'));
+      // Resources may be inherited from the page tree.
+      let parent = isPage ? pdfDictValue(raw, 'Parent') : null;
+      for (let hops = 0; !resRaw && parent && hops < 10; hops++){
+        const pRaw = pdfResolve(objects, parent);
+        if (!pRaw) break;
+        resRaw = pdfResolve(objects, pdfDictValue(pRaw, 'Resources'));
+        parent = pdfDictValue(pRaw, 'Parent');
+      }
+      const fmap = await fontMapFromResources(resRaw);
+      if (!fmap) continue;
+      if (isForm){ byStream[id] = fmap; continue; }
+      const contents = pdfDictValue(raw, 'Contents');
+      if (!contents) continue;
+      let refs = (contents.match(/(\d+)\s+\d+\s+R/g) || []).map(r => r.match(/^\d+/)[0]);
+      // /Contents can point at an array object rather than a stream.
+      if (refs.length === 1 && objects[refs[0]] && !objects[refs[0]].raw.includes('stream')){
+        refs = (objects[refs[0]].raw.match(/(\d+)\s+\d+\s+R/g) || []).map(r => r.match(/^\d+/)[0]);
+      }
+      refs.forEach(r => { byStream[r] = fmap; });
+    }
+    return byStream;
+  }
+
   async function extractPdfText(arrayBuffer){
     const bytes = new Uint8Array(arrayBuffer);
     const binStr = bytesToBinaryString(bytes);
     const objects = findAllPdfObjects(binStr);
+    let fontMaps = {};
+    try { fontMaps = await buildFontMaps(objects, bytes, binStr); } catch(e){ fontMaps = {}; }
     let allText = '';
     for (const id in objects){
       const obj = objects[id];
@@ -676,7 +891,7 @@
       } catch(e){ continue; }
       const decoded = winAnsiDecode(inflated);
       if (/\bTj\b|\bTJ\b/.test(decoded)){
-        const runs = pdfTokensToRuns(tokenizePdfContent(decoded));
+        const runs = pdfTokensToRuns(tokenizePdfContent(decoded), fontMaps[id] || null);
         allText += runsToText(runs) + '\n';
       }
     }
@@ -951,6 +1166,98 @@
     return failing;
   }
 
+  // ================= Warp way / weft way analysis =================
+  // Strength tests (seam slippage & seam strength, tensile, tear) report warp
+  // and weft separately. This reads each direction's line so the breakdown can
+  // flag WHICH direction failed (and, for seams, whether it was slippage or
+  // strength, plus the mode of failure) instead of showing a bare value.
+  const SEAM_FAILURE_MODES = { a:'fabric tear', b:'fabric tear at the jaws', c:'fabric tear at the seam', d:'breakage of sewing threads', e:'thread pull-out', f:'any combination of these' };
+
+  function analyseDirections(bodyLines, testName){
+    const SPEC_CODE = /\b[A-Z0-9]{2,}(?:-[A-Z0-9.]+){2,}(?:\s+(?:GBL[\w\-]*|PHASE))*\b/g;
+    const lines = (bodyLines || []).filter(l => l != null).map(l => String(l).replace(/\b(PASS|FAIL|DATA)\b/gi, ' '));
+    const flat = lines.join(' ').replace(/\s+/g, ' ');
+    const num = s => { const m = String(s).match(/\d+(?:\.\d+)?/); return m ? parseFloat(m[0]) : null; };
+    const out = [];
+
+    if (/seam/i.test(testName)){
+      const slipReq = (flat.match(/seam\s*opening\s*Min\.\s*(\d+(?:\.\d+)?)\s*kgf/i) || [])[1] || null;
+      const strReq = (flat.match(/Seam\s*Strength\s*Min\.\s*(\d+(?:\.\d+)?)\s*kgf/i) || [])[1] || null;
+      lines.forEach(l => {
+        const m = l.match(/^\s*(Warp|Weft)\s*Way\s*Seam\b(.*)$/i);
+        if (!m) return;
+        let rest = m[2].replace(SPEC_CODE, ' ')
+          .replace(/Seam\s*slippage\s*@\s*\d+(?:\.\d+)?\s*mm\s*seam\s*opening(?:\s*Min\.)?(?:\s*\d+(?:\.\d+)?\s*kgf)?/i, ' ')
+          .replace(/Seam\s*Strength\s*Min\.\s*\d+(?:\.\d+)?\s*kgf/i, ' ');
+        const modeM = rest.match(/\(([a-f])\)/i);
+        rest = rest.replace(/\([^)]*\)/g, ' ');
+        // Columns on the row: seam slippage result, seam strength result.
+        const vals = (rest.match(/NSS|\d+(?:\.\d+)?\s*\*?/gi) || []).map(v => v.replace(/\s+/g, ''));
+        const slip = vals[0] || null, str = vals[1] || null;
+        const slipFail = !!slip && !/^NSS$/i.test(slip) && (/\*/.test(slip) || (slipReq != null && num(slip) < parseFloat(slipReq)));
+        const strFail = !!str && (/\*/.test(str) || (strReq != null && num(str) < parseFloat(strReq)));
+        const parts = [];
+        if (slip) parts.push('Seam slippage ' + (/^NSS$/i.test(slip) ? 'NSS (no seam slippage)' : slip.replace('*', '') + ' kgf') + (slipReq ? ` (min ${slipReq} kgf)` : '') + (slipFail ? ' FAILED' : ''));
+        if (str) parts.push('Seam strength ' + str.replace('*', '') + ' kgf' + (strReq ? ` (min ${strReq} kgf)` : '') + (strFail ? ' FAILED' : ''));
+        const modeKey = modeM ? modeM[1].toLowerCase() : null;
+        out.push({
+          direction: (m[1].toLowerCase() === 'warp' ? 'Warp' : 'Weft') + ' way',
+          status: (slipFail || strFail) ? 'FAIL' : 'PASS',
+          parts,
+          mode: modeKey ? `(${modeKey}) ${SEAM_FAILURE_MODES[modeKey]}` : null
+        });
+      });
+      if (out.length) return out;
+      // No BV-style "Warp Way Seam" rows (e.g. SGS): fall through to the
+      // one-result-per-direction reading below.
+    }
+
+    // Tensile, tear and similar: one result per direction line.
+    let sectionReq = null;
+    for (const l of lines){ const r = l.match(MINMAX_PHRASE_RE); if (r){ sectionReq = r[0].replace(/\s+/g, ' ').trim(); break; } }
+    lines.forEach((l, i) => {
+      const m = l.match(/^\s*((?:Across\s+)?(?:Warp|Weft)(?:\s*Way)?)\b(.*)$/i);
+      if (!m) return;
+      let rest = m[2].replace(SPEC_CODE, ' ');
+      const ownReq = rest.match(MINMAX_PHRASE_RE) || ((lines[i + 1] || '').trim().match(/^(?:Min\.|Max\.)/i) ? lines[i + 1].match(MINMAX_PHRASE_RE) : null);
+      const req = ownReq ? ownReq[0].replace(/\s+/g, ' ').trim() : sectionReq;
+      rest = rest.replace(MINMAX_PHRASE_RE, ' ');
+      const v = rest.match(/(?:Grade\s*\d(?:\s*-\s*\d)?|\d[\d.,]*)\s*\*?/i);
+      if (!v) return;
+      const value = v[0].replace(/\s+/g, ' ').trim();
+      const unit = req ? ((req.match(/kgf?|gram\(s\)|grams?|mm|cm|%/i) || [])[0] || '') : '';
+      // A "*" on the value (BV) or a "*" / "Fail" anywhere on the line (SGS)
+      // marks the direction that did not meet the requirement.
+      const dirFailed = /\*/.test(value) || /\*|\bfail(ed)?\b|does not meet/i.test(rest);
+      out.push({
+        direction: /warp/i.test(m[1]) ? 'Warp way' : 'Weft way',
+        status: dirFailed ? 'FAIL' : 'PASS',
+        parts: [`${value.replace(/\s*\*$/, '')}${unit ? ' ' + unit : ''}${req ? ` (${req.replace(/^Min\./i, 'min').replace(/^Max\./i, 'max')})` : ''}`],
+        mode: null
+      });
+    });
+    return out.length >= 1 ? out : [];
+  }
+
+  // Every dry-rub grade in a colourfastness-to-rubbing section (pass or fail),
+  // used for the denim dry rub rule in the suggested action.
+  function extractDryRubGrades(bodyLines){
+    let mode = null;
+    const grades = [];
+    (bodyLines || []).forEach(l => {
+      const s = String(l || '');
+      if (/\bdry\b/i.test(s)) mode = 'dry';
+      else if (/\bwet\b/i.test(s)) mode = 'wet';
+      const stripped = s.replace(MINMAX_PHRASE_RE, ' ');
+      const re = /Grade:?\s*(\d)(?:\s*-\s*(\d))?/gi;
+      let m;
+      while ((m = re.exec(stripped))){
+        if (mode === 'dry') grades.push(m[2] ? (parseFloat(m[1]) + parseFloat(m[2])) / 2 : parseFloat(m[1]));
+      }
+    });
+    return grades;
+  }
+
   // Pulls individual property/requirement/result rows out of one section's body
   // text, anchored on "Min."/"Max." tokens (this report format's requirement
   // values are consistently phrased that way). Any leftover text after the last
@@ -1005,7 +1312,197 @@
     return rows;
   }
 
+  // ================= SGS reports =================
+  // SGS lays reports out differently from Bureau Veritas: a summary table
+  // ("Test Parameters ... Result") rates each test M / F / I / * per sample
+  // (M = meets, F = does not meet, I = inconclusive, * = no requirement),
+  // "Overall Conclusion : PASS/FAIL" on page 1, then one detail section per
+  // test with its own "Conclusion" and "Client Requirement". This parser
+  // returns the same shape as the Bureau Veritas one, so everything
+  // downstream (decision, matrix coverage, email, logs) works unchanged.
+  function isSgsReport(text){
+    const flat = text.replace(/\s+/g, ' ');
+    return /\bSGS\b/.test(flat) && /Test Parameters/i.test(flat) && /Overall Conclusion|Meets client/i.test(flat);
+  }
+
+  const SGS_SKIP_LINE = /^(Test Method|Test Conditions?|Samples? were|If tumble|Sample ID|Washing according|Temperature of|pH of KCl|Note|Remark|Component\b.*\bResult|Sample\s+No|Doc\.?No|TEST REPORT|AB\s*-\s*\d|\*\s*\*|General appearance|Visual assessment|Conditioning|Specimen|Procedure)/i;
+  const SGS_FOOTER = /document is issued by the Company|electronic format documents|limitation of liability|reflects the Company|exonerate parties|cannot be reproduced|unauthorized alteration|environmental conditions are specified|in the test result table|shared risk decision|Brand\/Trademark|TURKAK|Accreditation|Unless otherwise stated|retention time|^days\.|Member of the SGS|www\.sgs\.com|Tüketici|Osmanpa|^\s*-\s*$|Signed for and on behalf|Issued in|authorised signatures|^\d{2}\s*-\s*\d{2}\s*$|^[A-Z]{2}\d{5,}\s*$/i;
+
+  function sgsGradeTokens(s){
+    // Grades / numbers in a line: "4", "4 - 5", "3-4", "6,3", "1,2 %".
+    const out = [];
+    const re = /(?:^|[\s:(])([-+]?\d+(?:[.,]\d+)?(?:\s*[-–]\s*\d+(?:[.,]\d+)?)?(?:\s*(?:%|mm|cm|kgf|kg|N|g\/m²|gsm|°C))?)(?=$|[\s)*\/])/g;
+    let m;
+    while ((m = re.exec(s))) out.push(m[1].replace(/(\d)\s*[-–]\s*(\d)/, '$1-$2').replace(/\s+(%)/, '$1').trim());
+    return out;
+  }
+
+  function sgsSectionRows(body, clientReq){
+    // Measured rows from a detail section: property, result and (when the
+    // line carries two values, or the section states one) requirement.
+    const rows = [];
+    body.forEach(line => {
+      const l = line.replace(/\s+/g, ' ').trim();
+      if (!l || SGS_SKIP_LINE.test(l) || SGS_FOOTER.test(l)) return;
+      if (/^(Conclusion|Client Requirement)/i.test(l)) return;
+      if (/^[A-Z]\d*$/.test(l)) return; // lone sample id column header ("A1")
+      const toks = sgsGradeTokens(l);
+      const failMark = /\b(Fail(ed)?|Does not meet)\b|\*\s*$/i.test(l);
+      if (!toks.length && !failMark) return;
+      const firstIdx = toks.length ? l.search(/(?:^|[\s:(])\d/) : -1;
+      const property = (firstIdx > 0 ? l.slice(0, firstIdx) : l).replace(/[:\s]+$/, '').trim() || null;
+      const result = toks[0] || l;
+      const requirement = toks.length >= 2 ? toks[toks.length - 1] : (clientReq || null);
+      rows.push({ property, requirement, result, fail: failMark });
+    });
+    return rows;
+  }
+
+  function sgsDryRubGrades(body){
+    let mode = null;
+    const grades = [];
+    body.forEach(line => {
+      const l = String(line || '');
+      if (/ISO|Test Method/i.test(l)) return;
+      if (/\bdry\b/i.test(l)) mode = 'dry';
+      else if (/\bwet\b/i.test(l)) mode = 'wet';
+      if (mode !== 'dry') return;
+      // First grade on the line is the result; a second one is the requirement.
+      const m = l.match(/(?:^|\s)([1-5])(?:\s*[-–]\s*([1-5]))?(?=\s|$|\*)/);
+      if (m) grades.push(m[2] ? (parseFloat(m[1]) + parseFloat(m[2])) / 2 : parseFloat(m[1]));
+    });
+    return grades;
+  }
+
+  function guessSgsProductType(sampleDesc, endUse){
+    const s = (sampleDesc || '') + ' ' + (endUse || '');
+    const rules = [
+      ['Denim', /denim|\bjeans?\b/i],
+      ['Swimwear/Beachwear', /swim|bikini|beach/i],
+      ['Lingerie', /lingerie|\bbra\b|brief|knicker/i],
+      ['Activewear', /activewear|sportswear|legging/i],
+      ['Faux Fur & Borg', /faux fur|\bborg\b/i],
+      ['Leather & Suede', /\bleather\b|\bsuede\b/i],
+      ['Knitwear', /knitwear|jumper|cardigan|sweater/i],
+      ['Outerwear', /jacket|coat|parka|outerwear/i],
+      ['Tailoring', /\bsuit\b|blazer|tailor/i],
+      ['Jersey lining', /jersey lining/i],
+      ['Woven lining', /woven lining/i],
+      ['Weft knits', /jersey|t\s*-?\s*sh[iı]rt|sweat\s*shirt|hood(ie|y)|polo|weft knit|interlock|\brib\b|fleece/i],
+      ['Warp knits', /warp knit|tricot|mesh/i],
+      ['Woven', /\bwoven\b|\bshirt\b|trouser|dress|skirt|chino/i]
+    ];
+    for (const [type, re] of rules) if (re.test(s)) return type;
+    return null;
+  }
+
+  function parseSgsReport(text){
+    const flat = text.replace(/\s+/g, ' ');
+    const lines = text.split(/\r?\n/).map(l => l.replace(/\s+/g, ' ').trim()).filter(l => l.length);
+    // "Label : value" fields on page 1, one per line.
+    const field = label => {
+      const re = new RegExp('^' + label + '\\s*:\\s*(.*)$', 'i');
+      const line = lines.find(l => re.test(l));
+      const v = line ? line.match(re)[1].trim() : null;
+      return v && !/^(not provided|n\/?a|-)$/i.test(v) ? v : null;
+    };
+
+    const reportNoMatch = flat.match(/Report No\.?\s*:?\s*([A-Z]{0,4}\s?\d[\w\-\/]*)/i);
+    const reportNo = reportNoMatch ? reportNoMatch[1].replace(/\s+/g, '') : null;
+
+    // Supplier: the Manufacturer field, else the applicant name printed
+    // under the first page header.
+    let supplierName = field('Manufacturer');
+    if (!supplierName){
+      const hdr = lines.findIndex(l => /TEST REPORT/i.test(l) && /Page\s*1\s*of/i.test(l));
+      if (hdr !== -1 && lines[hdr + 1] && !/:/.test(lines[hdr + 1])) supplierName = lines[hdr + 1];
+    }
+
+    const concl = flat.match(/Overall Conclusion\s*:\s*([A-Za-z ]+?)(?=\s+[A-Z][a-z]+\s*[A-Za-z ]*:|\s*$)/);
+    let overallVerdict = null;
+    if (concl){
+      const c = concl[1].trim();
+      if (/^(fail|does not meet)/i.test(c)) overallVerdict = 'FAIL';
+      else if (/^(pass|meets?)/i.test(c)) overallVerdict = 'PASS';
+    }
+
+    // Summary table: "Test Parameters ... Result" blocks up to "Remarks".
+    const tableResults = [];
+    const startIdx = lines.findIndex(l => /^Test Parameters\b/i.test(l));
+    let summaryEnd = startIdx;
+    if (startIdx !== -1){
+      let pending = '';
+      for (let i = startIdx; i < lines.length; i++){
+        const l = lines[i];
+        summaryEnd = i;
+        if (/^Remarks\b/i.test(l) || /\bM\s*=\s*Meets/i.test(l)) break;
+        if (/^Test Parameters\b/i.test(l)){ pending = ''; continue; }
+        // Group header with sample ids, e.g. "Physical tests A" / "Chemical tests A1 B1"
+        if (/\btests?\s+(?:[A-Z]\d*\s*)+$/i.test(l) && !/\s[MFI*]$/.test(l)){ pending = ''; continue; }
+        const m = l.match(/^(.+?)\s+((?:(?:M|F|I|\*|N\/A|Pass|Fail)\s*)+)$/i);
+        if (m){
+          const name = (pending ? pending + ' ' : '') + m[1].trim();
+          const codes = m[2].trim().split(/\s+/).map(c => c.toUpperCase());
+          let rating = 'DATA';
+          if (codes.some(c => c === 'F' || c === 'FAIL')) rating = 'FAIL';
+          else if (codes.every(c => c === 'M' || c === 'PASS')) rating = 'PASS';
+          tableResults.push({ name, rating, sgsCodes: codes.join(' '), inconclusive: codes.includes('I') });
+          pending = '';
+        } else if (!SGS_FOOTER.test(l)){
+          pending = (pending ? pending + ' ' : '') + l; // name wrapped onto two lines
+        }
+      }
+    }
+
+    // Detail sections: each test's own heading after the summary page.
+    const norm = s => s.toLowerCase().replace(/[¹²³⁴⁵⁶⁷⁸⁹⁰]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+    const sectionStarts = tableResults.map(t => {
+      const n = norm(t.name);
+      const idx = lines.findIndex((l, i) => i > summaryEnd && norm(l).startsWith(n) && norm(l).length <= n.length + 6);
+      return { t, idx };
+    }).filter(s => s.idx !== -1).sort((a, b) => a.idx - b.idx);
+    const endIdx = lines.findIndex(l => /End of Test Report/i.test(l));
+    sectionStarts.forEach((s, k) => {
+      const stop = k + 1 < sectionStarts.length ? sectionStarts[k + 1].idx : (endIdx !== -1 ? endIdx : lines.length);
+      const body = lines.slice(s.idx + 1, stop).filter(l => !SGS_FOOTER.test(l));
+      const reqM = body.join(' ').match(/Client Requirement\s*:?\s*(.+?)(?=\s+(?:Conclusion|Test Method|Note)\b|$)/i);
+      const clientReq = reqM ? reqM[1].trim() : null;
+      const conclM = body.join(' ').match(/\bConclusion\s*:?\s*(Pass|Fail|Meets?|Does not meet|Inconclusive)/i);
+      const t = s.t;
+      t.sgsConclusion = conclM ? conclM[1] : null;
+      if (t.rating === 'FAIL' || t.rating === 'DATA'){
+        const rows = sgsSectionRows(body, clientReq);
+        const failing = rows.filter(r => r.fail);
+        const use = failing.length ? failing : rows;
+        if (use.length) t.rows = use.slice(0, 12).map(r => ({ property: r.property, requirement: r.requirement, result: r.result }));
+        else if (clientReq) t.detail = { requirement: clientReq, result: null };
+        if (t.rating === 'FAIL' && /seam|tensile|tear/i.test(t.name)){
+          const dirs = analyseDirections(body, t.name);
+          if (dirs.length) t.directions = dirs;
+        }
+      }
+      if (/rubbing|crocking/i.test(t.name)){
+        const g = sgsDryRubGrades(body);
+        if (g.length) t.dryRub = g;
+      }
+    });
+
+    const claimedFiber = field('Fib(?:er|re) Composition');
+    const sampleDescM = flat.match(/Sample No\.?\s+Sample Description\s+[A-Z]\d*\s+(.+?)\s+(?:Client|Buyer|TRF|Order|Model|Article)\b/i);
+    const detectedProductType = detectProductType(text) || guessSgsProductType(sampleDescM ? sampleDescM[1] : '', field('End Use'));
+
+    const failedNames = tableResults.filter(t => t.rating === 'FAIL').map(t => t.name);
+    const failedItems = tableResults.filter(t => t.rating === 'FAIL').map(t => ({
+      name: t.name, rows: t.rows || null, detail: t.detail || null, directions: t.directions || null
+    }));
+    if (!overallVerdict && tableResults.length) overallVerdict = failedNames.length ? 'FAIL' : 'PASS';
+
+    return { lab: 'SGS', reportNo, supplierName, division: null, overallVerdict, execFails: [], tableResults,
+      claimedFiber, actualFiber: null, recommendedLabel: null, failedNames, failedItems, detectedProductType };
+  }
+
   function parseReport(text){
+    if (isSgsReport(text)) return parseSgsReport(text);
     const flat = text.replace(/\s+/g, ' '); // collapse all whitespace for marker-based searches
     const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length);
 
@@ -1153,9 +1650,26 @@
             const failing = findFailingMeasurements(section.bodyLines);
             const rows = failing.length ? failing : parseSectionRows(section.bodyLines);
             if (rows.length) t.rows = rows;
+            if (t.rating === 'FAIL' && /seam|tensile|tear/i.test(t.name)){
+              const dirs = analyseDirections(section.bodyLines, t.name);
+              if (dirs.length) t.directions = dirs;
+            }
+            if (/rubbing|crocking/i.test(t.name)){
+              const g = extractDryRubGrades(section.bodyLines);
+              if (g.length) t.dryRub = g;
+            }
           }
         }
         if (!t.rows) t.detail = extractTestDetail(text, t.name, allTestNames);
+      } else if (t.rating === 'PASS' && /rubbing|crocking/i.test(t.name)){
+        // Passed rubbing tests are still read for the dry rub grade, since a
+        // denim dry rub at grade 3 needs fabric technologist review even when
+        // it meets the requirement.
+        const section = findMatchingSection(detailedSections, t.name, usedSections);
+        if (section){
+          const g = extractDryRubGrades(section.bodyLines);
+          if (g.length) t.dryRub = g;
+        }
       }
     });
 
@@ -1182,7 +1696,8 @@
         }
       }
       if (!rows && !detail) detail = extractTestDetail(text, name, otherContext);
-      return { name, rows, detail };
+      const directions = (fromTable && fromTable.directions) ? fromTable.directions : null;
+      return { name, rows, detail, directions };
     });
 
     return { reportNo, supplierName, division, overallVerdict, execFails, tableResults, claimedFiber, actualFiber, recommendedLabel, failedNames, failedItems, detectedProductType: detectProductType(text) };
@@ -1493,7 +2008,7 @@
       action:'Declared composition does not match lab analysis. Needs a label correction and/or a fabric substitution investigation with the supplier before proceeding — this is a compliance issue, not just a paperwork fix.' },
     { key:'structural', label:'Structural / Strength', test:/seam|tensile|tear|burst|elongation|grab method|strength|elasticity/i,
       action:'Structural or strength failure — suggests a fabric or construction weakness rather than test variance. Route to supplier for root-cause investigation; requires a physical retest once corrected, not a self-approval.' },
-    { key:'colourfastness', label:'Colourfastness / Dyeing', test:/colourfastness|color ?fastness|staining/i,
+    { key:'colourfastness', label:'Colourfastness / Dyeing', test:/colou?r ?fastness|staining/i,
       action:'Colourfastness failure — likely a dyeing or finishing issue with this batch. Flag to supplier for dye-lot investigation and retest.' },
     { key:'dimensional', label:'Dimensional Stability', test:/dimensional|shrinkage/i,
       action:'Dimensional stability failure — check the finishing or pre-shrink process with the supplier.' },
@@ -1939,6 +2454,11 @@
   // test item, for the email body (mirrors the Full Test Breakdown table's
   // cell logic, but as flat text rather than HTML).
   function detailTextForItem(item){
+    if (item.directions && item.directions.length){
+      return item.directions.map(d =>
+        `${d.direction} ${d.status === 'FAIL' ? 'FAILED' : 'passed'}: ${d.parts.join('; ')}${d.mode ? '; mode of failure ' + d.mode : ''}`
+      ).join(' | ');
+    }
     if (item.rows && item.rows.length){
       const dataRows = item.rows.filter(r => r.property);
       const rawRow = item.rows.find(r => r.raw);
@@ -2068,6 +2588,41 @@
       return { label: 'Other', action: 'Review this specific requirement with fabric tech — does not fall into a standard category.', urgent: false };
     }
 
+    // Suggested action for a failed test, based on how far the result falls
+    // short of the required grade. A shortfall of up to half a grade (e.g.
+    // required 4, result 3-4) can be accepted commercially; anything more, or
+    // a failure where grades can't be read (non-graded tests), needs the
+    // concerned fabric technologist's review.
+    function parseGrade(s){
+      if (!s) return null;
+      const str = String(s);
+      if (/\bmax\b/i.test(str)) return null;
+      let m = str.match(/grade\s*([1-5])(?:\s*[-\/]\s*([1-5]))?/i);
+      if (!m) m = str.match(/^\s*(?:min\.?\s*)?([1-5])(?:\s*[-\/]\s*([1-5]))?\s*(?:min\.?)?\s*\*?\s*$/i);
+      if (!m) return null;
+      const a = parseFloat(m[1]);
+      return m[2] ? (a + parseFloat(m[2])) / 2 : a;
+    }
+    function gradeFailureAction(t){
+      const REVIEW = "Concerned fabric technologist's review is required.";
+      const HALF = '1/2 grade failure can be accepted commercially.';
+      const pairs = [];
+      if (t.rows && t.rows.length){
+        t.rows.filter(r => r.property).forEach(r => pairs.push([r.requirement, r.result]));
+      } else if (t.detail){
+        pairs.push([t.detail.requirement, t.detail.result]);
+      }
+      let worst = null;
+      pairs.forEach(([req, res]) => {
+        const rq = parseGrade(req), rs = parseGrade(res);
+        if (rq == null || rs == null) return;
+        const short = rq - rs;
+        if (worst == null || short > worst) worst = short;
+      });
+      if (worst != null && worst > 0 && worst <= 0.5) return HALF;
+      return REVIEW;
+    }
+
     const fiberHtml = (parsed.claimedFiber || parsed.actualFiber) ? `
       <div class="section">
         <h3>Fibre content — claimed vs. lab analysis</h3>
@@ -2078,7 +2633,18 @@
         ${parsed.recommendedLabel ? `<div class="note-box">Lab-recommended label: ${escapeHtml(parsed.recommendedLabel)}</div>` : ''}
       </div>` : '';
 
-    const tableHtml = parsed.tableResults.length ? `
+    // Dry rub grades for a rubbing test: read from the whole section when
+    // available, otherwise from the failing rows that mention "dry".
+    function dryRubGradesFor(t){
+      if (t.dryRub && t.dryRub.length) return t.dryRub;
+      return (t.rows || []).filter(r => r.property && /\bdry\b/i.test(r.property)).map(r => parseGrade(r.result)).filter(g => g != null);
+    }
+    const fmtGrade = g => Number.isInteger(g) ? String(g) : `${Math.floor(g)}-${Math.ceil(g)}`;
+    const REVIEW_ACTION = "Concerned fabric technologist's review is required.";
+
+    // Rebuilt whenever the product type dropdown changes, since the denim
+    // dry rub rule depends on the product type.
+    const renderBreakdownHtml = (productType) => parsed.tableResults.length ? `
       <div class="section">
         <details open>
           <summary>Full test breakdown (${parsed.tableResults.length} tests)</summary>
@@ -2089,10 +2655,25 @@
               const dt = t.detail;
               let reqCell = '<span class="detail-na">—</span>';
               let resCell = '<span class="detail-na">—</span>';
-              const cat = t.rating === 'FAIL' ? categoryForName(t.name) : null;
+              // Denim rule: a dry rub at grade 3 or lower always goes to the
+              // fabric technologist, whether the rubbing test passed or failed.
+              const dryGrades = (/denim/i.test(productType || '') && /rubbing|crocking/i.test(t.name) && t.rating !== 'DATA') ? dryRubGradesFor(t) : [];
+              const denimDryRubReview = dryGrades.some(g => g <= 3);
+              const cat = (t.rating === 'FAIL' || denimDryRubReview || t.inconclusive) ? categoryForName(t.name) : null;
               const catCell = cat ? escapeHtml(cat.label) : '<span class="detail-na">—</span>';
-              const actionCell = cat ? escapeHtml(cat.action) : '<span class="detail-na">—</span>';
-              const rowClass = cat && cat.urgent ? ' class="urgent-row"' : (t.rating === 'FAIL' ? ' class="fail-row"' : '');
+              const failedDirs = (t.directions || []).filter(x => x.status === 'FAIL').map(x => x.direction);
+              let actionCell = '<span class="detail-na">—</span>';
+              if (denimDryRubReview){
+                actionCell = escapeHtml(REVIEW_ACTION) + `<div class="action-note">Denim: dry rub at grade ${escapeHtml(fmtGrade(Math.min(...dryGrades)))}</div>`;
+              } else if (t.rating === 'FAIL'){
+                actionCell = escapeHtml(gradeFailureAction(t));
+              } else if (t.inconclusive){
+                actionCell = escapeHtml(REVIEW_ACTION) + '<div class="action-note">SGS rated this test inconclusive (I)</div>';
+              }
+              if (t.rating === 'FAIL' && failedDirs.length){
+                actionCell += `<div class="action-note">Failed: ${escapeHtml(failedDirs.join(' and ').toLowerCase())}</div>`;
+              }
+              const rowClass = (cat && cat.urgent && t.rating === 'FAIL') ? ' class="urgent-row"' : (t.rating === 'FAIL' ? ' class="fail-row"' : ((denimDryRubReview || t.inconclusive) ? ' class="review-row"' : ''));
               if (t.rows && t.rows.length){
                 const dataRows = t.rows.filter(r => r.property);
                 const rawRow = t.rows.find(r => r.raw);
@@ -2129,7 +2710,20 @@
               }
               // Wrap the Result cell in a red-text span for FAIL rows so the
               // actual failing value stands out, on top of the row tint.
-              const resCellOut = t.rating === 'FAIL' ? `<span class="fail-value">${resCell}</span>` : resCell;
+              let resCellOut = t.rating === 'FAIL' ? `<span class="fail-value">${resCell}</span>` : resCell;
+              // Warp way / weft way: one line per direction, failed ones flagged.
+              if (t.directions && t.directions.length){
+                resCellOut = t.directions.map(x =>
+                  `<div class="dir-line"><span class="dir-flag ${x.status === 'FAIL' ? 'fail' : 'ok'}">${escapeHtml(x.direction)} ${x.status === 'FAIL' ? 'FAIL' : 'pass'}</span>` +
+                  x.parts.map(pt => (x.status === 'FAIL' && (/FAILED$/.test(pt) || x.parts.length === 1))
+                    ? `<span class="fail-value">${escapeHtml(pt)}</span>` : `<span>${escapeHtml(pt)}</span>`).join('; ') +
+                  `${x.mode ? `<div class="detail-na">Mode of failure: ${escapeHtml(x.mode)}</div>` : ''}</div>`
+                ).join('');
+              }
+              // A passed rubbing test flagged by the denim rule shows its dry rub grades.
+              if (t.rating !== 'FAIL' && denimDryRubReview){
+                resCellOut = `Dry rub: ${dryGrades.map(g => 'Grade ' + fmtGrade(g)).join(', ')}`;
+              }
               return `<tr${rowClass}><td>${escapeHtml(t.name)}</td><td>${reqCell}</td><td>${resCellOut}</td><td><span class="badge ${t.rating}">${t.rating}</span></td><td>${catCell}</td><td>${actionCell}</td></tr>`;
             }).join('')}</tbody>
           </table>
@@ -2144,7 +2738,7 @@
           <div>
             <div class="headtop">
               <span class="cardnum">#${cardCounter}</span>
-              <div class="reportno">${escapeHtml(parsed.reportNo || 'Report number not found')}</div>
+              <div class="reportno">${escapeHtml(parsed.reportNo || 'Report number not found')}${parsed.lab ? ' · ' + escapeHtml(parsed.lab) + ' report' : ''}</div>
               ${parsed.division ? `<span class="division-tag">${escapeHtml(parsed.division)}</span>` : ''}
             </div>
             ${fileLabel ? `<div class="sourcefile">${escapeHtml(fileLabel)}</div>` : ''}
@@ -2157,7 +2751,7 @@
         <div class="result-body">
           ${renderCoverageHtml(parsed, cardId, detected)}
           ${fiberHtml}
-          ${tableHtml}
+          <div class="breakdown-container">${renderBreakdownHtml(detected)}</div>
           <div class="email-section-container">${renderEmailSectionHtml(parsed, d, detected ? computeCoverage(parsed.tableResults, detected) : [])}</div>
         </div>
         <div class="decision-block">
@@ -2218,6 +2812,7 @@
       ptSelect.addEventListener('change', e => {
         const newType = e.target.value;
         card.querySelector('.coverage-body').innerHTML = renderCoverageBodyHtml(parsed, newType);
+        card.querySelector('.breakdown-container').innerHTML = renderBreakdownHtml(newType);
         const newCoverage = newType ? computeCoverage(parsed.tableResults, newType) : [];
         card.querySelector('.email-section-container').innerHTML = renderEmailSectionHtml(parsed, d, newCoverage);
         wireEmailSection();
